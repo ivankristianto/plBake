@@ -15,6 +15,7 @@ use vars qw($src_ball);
 use vars qw($src_url);
 use vars qw($FIN_MSG);
 use vars qw($configure);
+use vars qw($php_configure);
 use vars qw($make_install);
 
 our $RECIPEURI='http://scripts.ssullivan.org/recipes/';
@@ -27,16 +28,51 @@ our $RECIPEURI='http://scripts.ssullivan.org/recipes/';
 # This method returns the path to php.ini
 #
 sub php_ini {
-	my $php_ini = `php -i | grep php.ini | awk 'BEGIN \{ FS = "=>" } \; { print \$2 }' | grep php.ini | sed 's/ //g'`;
-	chomp($php_ini);
-	return $php_ini;
+        my $call = `php -i | grep php.ini`;
+        chomp($call);
+        my $php_ini = substr($call, 81, 35);
+        if ( ! -e $php_ini ) {
+		print color 'yellow'; print "[ ",POSIX::strftime("%m/%d/%Y %H:%M:%S ", localtime)  ,"] "; print color 'reset'; print "WARNING: Pure perl method failed to get location of php.ini. Trying different method...\n";
+                $php_ini = `php -i | grep php.ini | awk 'BEGIN \{ FS = "=>" } \; { print \$2 }' | grep php.ini | sed 's/ //g'`;
+                chomp($php_ini);
+        }
+        return $php_ini;
+}
+
+##
+# The "php_ext" method checks the system php.ini for the inclusion of the
+# given module.  If the module is not already referenced, then a reference
+# is added.  This check needs to be rethought.
+sub php_ext {
+	my $extension = $_[0];
+	my $phpini = php_ini();
+	my $grepChk = `grep -i -c $extension $phpini`;
+	if ( $grepChk == 0 ) {
+		system("echo \"extension = $extension\" >> $phpini");
+	}	
+}
+
+##
+# The "php_config_check" method checks the php configuration for a given grep
+# regex to ensure the availability of functionality. 
+sub php_config_check {
+	my $extension = $_[0];
+	my $isLoaded;
+	my $confCheck = `php -i | grep -c $extension`;
+	if ( $confCheck == 0 ) {
+		$isLoaded = 'false';
+	}
+	else {
+		$isLoaded = 'true';
+	}
+	return $isLoaded;
 }
 
 ##
 # This method is for the lulz.
 #
 sub lol {
-	print "Needs moar /scripts/easymurphy!\n";
+	print color 'bold yellow'; print "[ ",POSIX::strftime("%m/%d/%Y %H:%M:%S ", localtime)  ,"] "; print color 'reset'; print "Needs moar /scripts/easymurphy!\n";
 }
 
 
@@ -67,6 +103,34 @@ sub build {
 	}
 }
 
+##
+# The "php_ext_build" method does a checks for phpize, and runs it if found. Next,
+# ./configure is ran unless a custom configure is specified in the recipe via 
+# $php_configure. After the configure process, make is ran.
+sub php_ext_build {
+	my $phpizeChk = `which phpize`;
+	chomp($phpizeChk);
+	if ( ! -e $phpizeChk ) {
+		die_log("phpize was not found on this system; please install it (or put in path). Detected: $phpizeChk");
+	}
+	my $stderr = `cd $BUILDPREF/$SRCDIR && phpize 2>&1 1>/dev/null`;
+	if ( $? != 0 ) {
+		die_log("phpize threw STDERR $stderr");
+	}
+	if ( $php_configure ) {
+		$stderr = `cd $BUILDPREF/$SRCDIR && $php_configure 2>&1 1>/dev/null`;
+	}
+	else {
+		$stderr = `cd $BUILDPREF/$SRCDIR && ./configure 2>&1 1>/dev/null`;
+	}
+        if ( $? != 0 ) {
+	        die_log("configure command threw STDERR: $stderr");
+        }
+	$stderr = `cd $BUILDPREF/$SRCDIR && make 2>&1 1>/dev/null`;
+	if ( $? != 0 ) {
+		die_log("make threw STDERR $stderr");
+	}
+}
 
 #
 # Install methods
