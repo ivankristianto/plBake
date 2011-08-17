@@ -1,0 +1,25 @@
+#!/usr/bin/perl
+
+use strict;
+
+our $src_ball = 'mailparse-2.1.5.tgz';
+our $src_url = 'http://pecl.php.net/get';
+our $SRCDIR = 'mailparse-2.1.5';
+our $FIN_MSG = "Please restart Apache for full mailparse-php support.";
+
+un_pack();
+my $loadedChk = php_config_check("mailparse");
+if ( $loadedChk eq 'true' ) {
+	print color 'blue'; print "[ ",POSIX::strftime("%m/%d/%Y %H:%M:%S ", localtime)  ,"] "; print color 'reset'; print "mailparse is already loaded into the PHP configuration.\n";
+	exit;
+}
+else {
+	php_ext_build();
+	do_install();
+	php_ext("mailparse.so");
+	$loadedChk = php_config_check("mailparse");
+	if ( $loadedChk eq 'false' ) {
+		print color 'red'; print "[ ",POSIX::strftime("%m/%d/%Y %H:%M:%S ", localtime)  ,"] "; print color 'reset'; print "FATAL: mailparse-php is not loaded into PHP configuration.\n";
+		exit(1);
+	}
+}
