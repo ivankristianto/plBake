@@ -17,6 +17,7 @@ use vars qw($FIN_MSG);
 use vars qw($configure);
 use vars qw($make_install);
 
+our $RECIPEURI='http://scripts.ssullivan.org/recipes/';
 
 #
 # Helper methods 
@@ -210,7 +211,6 @@ sub bake_reqs {
 #
 sub first_run {
 	our $BUILDPREF = '/usr/local/src/plBake';
-	our $RECIPEURI='http://scripts.ssullivan.org/recipes/';		
 	our $installed_dir = "$BUILDPREF/.installed";
 	
 	if ( $< != 0 ) {
@@ -260,9 +260,19 @@ sub is_installed {
 # Show basic help
 #
 sub help {
-	print "
-./plBake RECIPE --- Install RECIPE
-./plBake RECIPE --refried --- Even though RECIPE is already installed, force a re-install\n\n";
+	print "usage - ./plBake (--help|(--refried) recipe_to_bake)
+
+    --help
+        Shows this message.
+
+    --refried
+        Bakes the recipe regardless of a previous successful bake.
+
+    recipe_to_bake
+        This is the recipe to bake.  A full list of recipes is currently
+        available at the following URL:
+
+    $RECIPEURI\n";
 	exit;
 }
 
@@ -278,6 +288,20 @@ sub pre_install {
         	        die_log("Command failed ($cmd): $stderr");
         	}
 	};
+}
+
+##
+# The "ldrefresh" method just refreshes the library search path cache so
+# that whatever it is that we just installed can be, you know, used by
+# the system.  Since most of the things that we install are prefixed to
+# /usr/local, it also runs an ldcheck for /usr/local/lib.
+sub ldrefresh {
+	print color 'dark blue'; print "[ ",POSIX::strftime("%m/%d/%Y %H:%M:%S ", localtime)  ,"] "; print color 'reset'; print "Refreshing ld.so.cache ...\n";
+	system("ldcheck /usr/local/lib usr-local-lib.conf");
+	my $stderr = `ldconfig 2>&1 1>/dev/null`;
+	if ( $? != 0 ) {
+		die_log("ldconfig failed ... that's bad: $stderr");
+	}
 }
 
 ##
@@ -300,5 +324,6 @@ sub main {
 	source_http("$url");
 	## create the file so we know recipe is installed.
 	system("touch $installed_dir/$recipe");
+	ldrefresh();
 	fin_msg();
 }
