@@ -69,6 +69,22 @@ sub php_config_check {
 }
 
 ##
+# The "what_arch" method returns if the system is 32 or 64 bit.
+#
+sub what_arch {
+        my $arch_chk = `uname -m`;
+        chomp($arch_chk);
+        my $arch;
+        if ( $arch_chk =~ /x86_64/ ) {
+                $arch = '64bit';
+        }
+        else {
+                $arch = '32bit';
+        }
+        return $arch;
+}
+
+##
 # This method is for the lulz.
 #
 sub lol {
@@ -104,7 +120,7 @@ sub build {
 }
 
 ##
-# The "php_ext_build" method does a checks for phpize, and runs it if found. Next,
+# The "php_ext_build" method does a check for phpize, and runs it if found. Next,
 # ./configure is ran unless a custom configure is specified in the recipe via 
 # $php_configure. After the configure process, make is ran.
 sub php_ext_build {
@@ -226,27 +242,6 @@ sub gen_url {
 }
 
 ##
-# Source the recipe so it inherits the plBake environment.
-# this is much the same idea like the remote url include option in PHP.
-#
-sub source_http {
-        my $url = $_[0];
-        my $content = get ($url);
-	if ( ! $content ) {
-	        die_log "plBake ERROR: Couldn't fetch recipe $url; is it a valid?\n";
-	}
-        my $recipe_work = "$recipe.tmp";
-        if ( ! -e "$recipe_work" ) {
-                system("touch $recipe_work");
-        }
-        open FILE, ">$recipe_work" or die $!;
-        print FILE "$content";
-        close(FILE);
-        do "$recipe_work";
-        unlink $recipe_work;
-}
-
-##
 # Display the finished message defined in the recipe to the user.
 #
 sub fin_msg {
@@ -324,7 +319,7 @@ sub is_installed {
 # Show basic help
 #
 sub help {
-	print "usage - ./plBake (--help|(--refried) recipe_to_bake)
+	print "usage - ./plBake ((--help) recipe_to_bake (--refried))
 
     --help
         Shows this message.

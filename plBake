@@ -9,25 +9,26 @@
 
 use LWP::Simple;
 
-use strict;
-use warnings;
-
 if ( scalar(@ARGV) == 0 ) {
 	print "You need to specify a recipe to install.\n";
 	exit(1);
 }
+my $PLBAKEFUNCTIONS = 'http://scripts.ssullivan.org/plBake-functions';
 our @args;
 for my $arg (@ARGV) {
 	push(@args, $arg);
 };
 our %params = map { $_ => 1 } @args;
 our $recipe = $args[0];
-if ( ! -e 'plBake-functions' ) {
-	my $stderr = `wget http://scripts.ssullivan.org/plBake-functions 2>&1 1>/dev/null`;
-	if ( $? != 0 ) {	
-		print "FATAL: Couldn't fetch plBake-functions: $stderr \n";
-		exit(1);
-	}
+
+sub source_http {
+        my $url = $_[0];
+        my $content = get ($url);
+        if ( ! $content ) {
+                die "plBake ERROR: Couldn't fetch recipe $url; is it a valid?\n";
+        }
+        eval $content; die $@ if $@;
 }
-do 'plBake-functions';
+source_http("$PLBAKEFUNCTIONS");
+
 main();
