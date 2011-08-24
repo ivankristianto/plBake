@@ -85,6 +85,118 @@ sub what_arch {
 }
 
 ##
+# Determine if the package is installed in RPM or not. Returns yes or no.
+#
+sub rpm_is_installed {
+	my $package = $_[0];
+	my $return;
+	my $rpmQuery = `rpm -qa|grep -i $package`;
+	if ( $rpmQuery =~ /$package/ ) {	
+		$return = 'yes';
+	}
+	else {
+		$return = 'no';
+	}
+	return $return;
+}
+
+##
+# This method removes the passed packaged via yum.
+#
+sub yum_rm_package {
+	my $package = $_[0];
+	my $stderr = `yum remove -y $package 2>&1 1>/dev/null`;
+	if ( $? != 0 ) {
+		die_log("Failed to remove $package with yum: $stderr");
+	}
+}
+
+##
+# This method starts the passed service with init script in /etc/init.d.
+# After start cmd issued, checks to ensure it is showing in process listing.
+#
+sub start_and_check {
+	my $init_script_name = $_[0];
+	my $proc_name = $_[1];
+	my $result;
+	if ( ! -e "/etc/init.d/$init_script_name" ) {
+		die_log("Init script /etc/init.d/$init_script_name cannot be found.");
+	}
+	my $stderr = `/etc/init.d/$init_script_name restart 2>&1 1>/dev/null`;
+	if ( $? != 0 ) {
+		die_log("Failed to start $init_script_name with /etc/init.d/$init_script_name: $stderr");
+	}
+	my $proc_check = `pgrep $proc_name`;
+	unless ( $proc_check ) {
+		die_log("Started $init_script_name with /etc/init.d/$init_script_name but $proc_name is not running.");
+	}
+}
+
+##
+# This method returns a password of specified length. 
+#
+sub pw_generate {
+	my $password_length = $_[0];
+        my $password;
+        my @chars=('a'..'z','A'..'Z','0'..'9','_','=','@','-','|','{','}','/',']','[');
+        foreach (1..$password_length) {
+                $password.=$chars[rand @chars];
+        };
+        return $password;
+}
+
+##
+# This method determines the apxs to use.
+#
+sub which_apxs {
+	my $apxs;
+	if ( -e '/usr/local/apache/bin/apxs' ) {
+		$apxs = '/usr/local/apache/bin/apxs';
+	}
+	elsif ( -e '/usr/bin/apxs' ) {
+		$apxs = '/usr/bin/apxs';
+	}
+	else {
+		die_log("apxs not found on system. If this box doesn't have cPanel, try installing httpd-devel.");
+	}
+	return $apxs;
+}
+
+##
+# This method determines the Apache directory.
+#
+sub find_apache_dir {
+	my $apache_dir;
+	if ( -d '/usr/local/apache' ) {
+		$apache_dir = '/usr/local/apache';
+	}
+	elsif ( -d '/etc/httpd' ) {
+		$apache_dir = '/etc/httpd';
+	}
+	else {
+		die_log("Couldn't find a valid Apache directory.");
+	}
+	return $apache_dir;
+}
+
+##
+# This method returns the path to htpasswd. If it cannot be found, dies and logs the error.
+#
+sub find_htpasswd {
+	my $htpasswd_path;
+	if ( -e '/usr/local/apache/bin/htpasswd' ) {
+		$htpasswd_path = '/usr/local/apache/bin/htpasswd';
+	}
+	elsif ( -e '/usr/bin/htpasswd' ) {
+		$htpasswd_path = '/usr/bin/htpasswd';
+	}
+	else {
+		die_log("Unable to find htpasswd on this system. Is it present?");
+	}
+	return $htpasswd_path;
+}
+
+##
 # This method is for the lulz.
 #
 sub lol {
@@ -225,7 +337,7 @@ sub un_pack {
 sub die_log {
 	my $msg = $_[0];
 	my $build_log = "$BUILDPREF/$recipe.log";
-	open(FILE,">>$build_log") || die("Cannot open $build_log");	
+	open(FILE,">$build_log") || die("Cannot open $build_log");	
 	print FILE "$msg\n";
 	close(FILE);
 	print color 'red'; print "\n[ ",POSIX::strftime("%m/%d/%Y %H:%M:%S ", localtime)  ,"] "; print color 'reset'; print "plBake error: error baking $recipe. Check $build_log for details.\n";
@@ -342,7 +454,7 @@ sub pre_install {
 	my $cmdsRef = $_[0];
 	my $stderr;
         for my $cmd( @{$cmdsRef} ) {
-	        $stderr = `$cmd 2>&1 1>/dev/null`;
+	        $stderr = `$cmd`;
         	if ( $? != 0 ) {
         	        die_log("Command failed ($cmd): $stderr");
         	}

@@ -1,0 +1,270 @@
+#!/usr/bin/perl
+
+use strict;
+
+our $src_ball = 'subversion-1.6.17.tar.gz';
+our $src_url = 'http://layer3.liquidweb.com/scripts/plBake/packages';
+our $SRCDIR = 'subversion-1.6.17';
+
+system("rm -rf /usr/local/src/plBake/subversion-1.6.17 > /dev/null 2>&1");
+
+my $apxs = which_apxs();
+my $apache_dir = find_apache_dir();
+my $arch = what_arch();
+if ( $params{'--mod_dav_svn'} ) {
+	if ( $arch eq '64bit' ) {
+		our $configure = "./configure --with-apxs=$apxs --with-apr=$apache_dir --with-ssl --with-apr-util=$apache_dir --without-berkeley-db --enable-lib64 --libdir=/usr/lib64 --prefix=/usr/local";
+	}
+	else {
+		our $configure = "./configure --with-apxs=$apxs --with-apr=$apache_dir --with-ssl --with-apr-util=$apache_dir --without-berkeley-db --prefix=/usr/local";
+	}
+}
+elsif ( $params{'--svnserve'} ) {
+	if ( $arch eq '64bit' ) {
+		our $configure = "./configure --with-apxs=no --with-ssl --without-berkeley-db --enable-lib64 --libdir=/usr/lib64 --prefix=/usr/local";
+	}
+	else {
+		our $configure = "./configure --with-apxs=no --with-ssl --without-berkeley-db --prefix=/usr/local";
+	}
+}
+
+if ( $params{'--svnserve'} ) {
+	if (! $params{'--with-repo'} ) {
+		our $FIN_MSG = 'Finished baking svnserve. Please ensure TCP port 3690 is opened in the firewall. Init script placed at /etc/init.d/subversion; configuration file at /etc/sysconfig/subversion. Repositories can now be created under /home/svn. For help configuring a repository, please see https://wiki.int.liquidweb.com/articles/Subversion#Configuration (or use --with-repo)';
+	}
+}
+elsif ( $params{'--mod_dav_svn'} ) {
+	if (! $params{'--with-repo'} ) {
+		our $FIN_MSG = 'Finished baking mod_dav_svn. Please restart httpd for full mod_dav_svn support. You can now create a repository. If you need help with this please see: https://wiki.int.liquidweb.com/articles/Subversion#Configuration_2 (or use --with-repo)';
+	}
+}
+
+sub rmPackageSvn {
+	my $check = rpm_is_installed('subversion');
+	if ( $check eq 'yes' ) {
+		print color 'yellow'; print "[ ",POSIX::strftime("%m/%d/%Y %H:%M:%S ", localtime)  ,"] "; print color 'reset'; print "Subversion is installed through yum; removing...\n";
+		yum_rm_package('subversion');
+	}
+}
+
+if ( $params{'--svnserve'} ) {
+	rmPackageSvn();
+	un_pack();
+	build();
+	do_install();
+	my $svnserve_init_script = '
+#!/bin/bash
+#
+#   /etc/rc.d/init.d/subversion
+#
+# Starts the Subversion Daemon
+#
+# chkconfig: - 90 10
+# description: Subversion Daemon
+ 
+# processname: svnserve
+ 
+source /etc/rc.d/init.d/functions
+ 
+PATH="/sbin:/usr/sbin:/bin:/usr/bin:/usr/local/bin"
+ 
+[ -x /usr/bin/svnserve -o /usr/local/bin/svnserve ] || exit 1
+ 
+### Default variables
+SYSCONFIG="/etc/sysconfig/subversion"
+ 
+### Read configuration
+[ -r "$SYSCONFIG" ] && source "$SYSCONFIG"
+ 
+RETVAL=0
+prog="svnserve"
+desc="Subversion Daemon"
+ 
+start() {
+   echo -n $"Starting $desc ($prog): "
+   daemon $prog -d $OPTIONS 
+   RETVAL=$?
+   [ $RETVAL -eq 0 ] && touch /var/lock/subsys/$prog
+   echo
+}
+ 
+stop() {
+   echo -n $"Shutting down $desc ($prog): "
+   killproc $prog
+   RETVAL=$?
+   [ $RETVAL -eq 0 ] && success || failure
+   echo
+   [ $RETVAL -eq 0 ] && rm -f /var/lock/subsys/$prog
+   return $RETVAL
+}
+ 
+case "$1" in
+  start)
+   start
+   ;;
+  stop)
+   stop
+   ;;
+  restart)
+   stop
+   start
+   RETVAL=$?
+   ;;
+  condrestart)
+        [ -e /var/lock/subsys/$prog ] && restart
+   RETVAL=$?
+   ;;
+  *)
+   echo $"Usage: $0 {start|stop|restart|condrestart}"
+   RETVAL=1
+esac
+ 
+exit $RETVAL
+';
+	my $init_location = '/etc/init.d/subversion';
+	if ( -e $init_location ) {
+		unlink $init_location;
+	}	
+	open FILE, ">$init_location" or die "unable to open $init_location $!";
+	print FILE "$svnserve_init_script";
+	close(FILE);
+	system("chmod 755 $init_location");
+	system("chkconfig subversion on");
+	if ( ! -d '/home/svn' ) {
+		system("mkdir /home/svn");	
+	}
+	my $conf_contents = 'OPTIONS="-r /home/svn"';
+	my $svnserve_conf = '/etc/sysconfig/subversion';
+	if ( -e $svnserve_conf ) {
+		unlink $svnserve_conf;
+	}
+	open FILE, ">$svnserve_conf" or die "unable to open $svnserve_conf $!";
+	print FILE "$conf_contents";
+	close(FILE);
+	if ( $params{'--with-repo'} ) {
+		my $stderr;
+		if ( ! -d '/home/svn/source' ) {
+			system("mkdir /home/svn/source");
+			$stderr = `svnadmin create /home/svn/source 2>&1 1>/dev/null`;
+			if ( $? != 0 ) {
+				die_log("Error while running 'svnadmin create /home/svn/source: $stderr");
+			}
+		}
+		elsif ( -d '/home/svn/source' ) {
+			print color 'red'; print "[ ",POSIX::strftime("%m/%d/%Y %H:%M:%S ", localtime)  ,"] "; print color 'reset'; print "/home/svn/source already exists; clear this out if you want to use --with-repo option.\n"; exit(1);
+		}
+		if ( ! -d '/home/svn/source/conf' ) {
+			die_log("/home/svn/source/conf doesn't exist; something went wrong creating the repository.");
+		}
+		else {
+			system("chmod 600 /home/svn/source/conf/*");
+		}
+		my $svnserveconf = '/home/svn/source/conf/svnserve.conf';
+		$stderr = `sed -i 's/# anon-access = read/anon-access = read/g' $svnserveconf 2>&1 1>/dev/null`;
+		if ( $? != 0 ) {
+			die_log("Error from sed when uncommenting anon-access from $svnserveconf: $stderr");
+		}
+		$stderr = `sed -i 's/# auth-access = write/auth-access = write/g' $svnserveconf 2>&1 1>/dev/null`;
+		if ( $? != 0 ) {
+			die_log("Error from sed when uncommenting auth-access from $svnserveconf: $stderr");
+		}
+		$stderr = `sed -i 's/# password-db = passwd/password-db = passwd/g' $svnserveconf 2>&1 1>/dev/null`;
+		if ( $? != 0 ) {
+			die_log("Error from sed when uncommenting passwd-db from $svnserveconf: $stderr");
+		}
+		my $svnpasswdconf = '/home/svn/source/conf/passwd';
+		my $password = pw_generate('8');				
+		
+		$stderr = `echo "admin = $password" >> $svnpasswdconf`;
+		if ( $? != 0 ) {
+			die_log("Error inserting user into $svnpasswdconf: $stderr");
+		}
+		my $authzconffile = '/home/svn/source/conf/authz';
+		my $to_add = '[/]
+admin = rw';
+		$stderr = `echo "$to_add" >> $authzconffile`;	
+		if ( $? != 0 ) {
+			die_log("Error inserting to $authzconffile: $stderr");
+		}
+                our $FIN_MSG = "Finished baking svnserve. Please ensure TCP port 3690 is opened in the firewall. Init script placed at /etc/init.d/subversion; configuration file at /etc/sysconfig/subversion. Repository was setup at /home/svn/source. Initial user is admin with password $password";
+	}
+	start_and_check('subversion','svnserve');	
+}
+elsif ( $params{'--mod_dav_svn'} ) {
+	rmPackageSvn();
+        un_pack();
+	build();
+        do_install();
+
+	if ( $params{'--with-repo'} ) {
+		my $password = pw_generate('8');
+                my $stderr;
+		if ( ! -d '/home/svn' ) {
+			system("mkdir /home/svn");
+		}
+                if ( ! -d '/home/svn/source' ) {
+                        system("mkdir /home/svn/source");
+                        $stderr = `svnadmin create /home/svn/source 2>&1 1>/dev/null`;
+                        if ( $? != 0 ) {
+                                die_log("Error while running 'svnadmin create /home/svn/source: $stderr");
+                        }
+                }
+                elsif ( -d '/home/svn/source' ) {
+                        print color 'red'; print "[ ",POSIX::strftime("%m/%d/%Y %H:%M:%S ", localtime)  ,"] "; print color 'reset'; print "/home/svn/source already exists; clear this out if you want to use --with-repo option.\n"; exit(1);
+                }
+                system("chmod 600 /home/svn/source/conf/*");
+
+		my $htpasswd = find_htpasswd();
+		$stderr = `$htpasswd -m -c -b /etc/svn-auth-file admin $password 2>&1 1>/dev/null`;
+		if ( $? != 0 ) {
+			die_log("Command failed: '$htpasswd -m -c -b /etc/svn-auth-file admin $password': $stderr");
+		}
+		### We don't need to add this conf in twice after all..
+		if ( ! $params{'--refried'} ) {
+			my $mod_dav_svn_conf = ' 
+<Location /svn>
+  DAV svn
+  SVNPath /home/svn/source      
+  # Access control file
+  AuthzSVNAccessFile /etc/svn-authz-file                          
+  # Require authenticated access
+  Require valid-user
+  # How to authenticate a user
+  AuthType Basic
+  AuthName "Subversion repository"
+  AuthUserFile /etc/svn-auth-file                  
+ </Location>';		
+			my $incFile;
+			if ( -e '/usr/local/apache/conf/includes/pre_main_global.conf' ) {	
+				$incFile = '/usr/local/apache/conf/includes/pre_main_global.conf';
+			}
+			elsif ( -d '/etc/httpd/conf.d' ) {
+				$incFile = '/etc/httpd/conf.d/mod_dav_svn.conf';
+				if ( ! -e '/etc/httpd/conf.d/mod_dav_svn.conf' ) {
+					system("touch /etc/httpd/conf.d/mod_dav_svn.conf");
+				}
+			}
+			else {
+				die_log("Unable to find a suitable location to place svn include entry.");
+			}
+			open(FILE,">>$incFile") || die("Cannot open $incFile");
+			print FILE "$mod_dav_svn_conf";
+			close(FILE);
+		}
+
+		if ( -e '/etc/svn-authz-file' ) {
+			unlink('/etc/svn-authz-file');
+		}
+                my $authzConf = '[/]
+admin = rw';
+		open(FILE,">>/etc/svn-authz-file") || die("Cannot open /etc/svn-authz-file");
+		print FILE "$authzConf";
+		close(FILE);		
+		my $hostname = `/bin/hostname`;	
+		chomp($hostname);
+		our $FIN_MSG = "Finished baking mod_dav_svn. Please restart httpd for mod_dav_svn support. Created repository (http://$hostname/svn) /home/svn/source with user: admin pass: $password";
+	}
+}
+else {
+	die "You Need to specify installation type (--svnserve|--mod_dav_svn).\n";
+}

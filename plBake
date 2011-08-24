@@ -25,7 +25,7 @@ sub source_http {
         my $url = $_[0];
         my $content = get ($url);
         if ( ! $content ) {
-                die "plBake ERROR: Couldn't fetch recipe $url; is it a valid?\n";
+                die "plBake ERROR: Couldn't fetch recipe $url; is it valid?\n";
         }
         eval $content; die $@ if $@;
 }
