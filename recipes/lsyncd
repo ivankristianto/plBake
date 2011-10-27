@@ -1,0 +1,16 @@
+#!/usr/bin/perl
+
+## http://sites.google.com/site/norandatechnology/linux/lsyncd
+
+my @SRCREQ = ('lua');
+my $SRCREQref = \@SRCREQ;
+bake_reqs($SRCREQref);
+
+our $src_ball = 'lsyncd-2.0.5.tar.gz';
+our $src_url = 'http://layer3.liquidweb.com/scripts/plBake/packages';
+our $SRCDIR = 'lsyncd-2.0.5';
+our $FIN_MSG = "Finished baking lsyncd; Enjoy.";
+
+un_pack();
+system("cd $BUILDPREF/$SRCDIR && export PKG_CONFIG_PATH=/usr/lib/pkgconfig && ./configure > /dev/null 2>&1 && sed -i 's/CFLAGS = -g -O2 -Wall \$(LUA_CFLAGS)/CFLAGS = -ldl -lm -g -O2 -Wall \$(LUA_CFLAGS)/g' $BUILDPREF/$SRCDIR/Makefile > /dev/null 2>&1 && make > /dev/null 2>&1");
+do_install();

@@ -1,0 +1,14 @@
+#!/usr/bin/perl
+
+use strict;
+
+our $FIN_MSG = 'All required Perl modules for suphpfix have been installed; suphpfix.pl placed at /scripts/suphpfix.pl';
+
+my $cpanelVerify = `/sbin/chkconfig --list | grep cpanel`;
+if ( $cpanelVerify !~/3:on/) {
+	die_log("cPanel not found (needs to be enabled in chkconfig run level 3).");
+}
+
+my @cmds = ('/scripts/perlinstaller JSON','/scripts/perlinstaller Linux::Ext2::FileAttributes','/scripts/perlinstaller File::Find::Object::Rule','wget -O /scripts/suphpfix.pl http://layer3.liquidweb.com/scripts/suphpfix.pl &> /dev/null','chmod +x /scripts/suphpfix.pl');
+my $cmdsRef = \@cmds;
+pre_install($cmdsRef);

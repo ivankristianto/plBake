@@ -1,0 +1,64 @@
+#!/usr/bin/perl
+
+our $src_ball = 'mod_rpaf-0.6.tar.gz';
+our $src_url = 'http://layer3.liquidweb.com/scripts/plBake/packages';
+our $SRCDIR = 'mod_rpaf-0.6';
+our $FIN_MSG = "Finished baking mod_rpaf.";
+
+un_pack();
+
+my $cpChk = has_cpanel();
+my $apacheV = apacheVer();
+if ( $apacheV eq '1.x' ) {
+	if ( $cpChk eq 'yes' ) {
+		my @cmds = ("cd $BUILDPREF/$SRCDIR && /usr/local/apache/bin/apxs -i -a -c mod_rpaf.c");
+        	my $cmdsRef = \@cmds;
+        	pre_install($cmdsRef);	
+	}
+	else {
+		my @cmds = ("cd $BUILDPREF/$SRCDIR && apxs -i -a -c mod_rpaf.c");
+                my $cmdsRef = \@cmds;
+                pre_install($cmdsRef);
+	}
+}
+else {
+	if ( $cpChk eq 'yes' ) {
+		my @cmds = ("cd $BUILDPREF/$SRCDIR && /usr/local/apache/bin/apxs -i -c -n mod_rpaf-2.0.so mod_rpaf-2.0.c");
+                my $cmdsRef = \@cmds;
+                pre_install($cmdsRef);
+        }
+        else {
+                my @cmds = ("cd $BUILDPREF/$SRCDIR && apxs -i -c -n mod_rpaf-2.0.so mod_rpaf-2.0.c");
+                my $cmdsRef = \@cmds;
+                pre_install($cmdsRef);
+        }
+}
+my $include_file;
+if ( $cpChk eq 'yes' ) {
+	$include_file = '/usr/local/apache/conf/includes/pre_main_global.conf';
+}
+else {
+	$include_file = '/etc/httpd/conf.d/rpaf.conf';
+}
+my @ips = `ifconfig |grep "inet addr:"|awk '{print \$2}'|cut -d ":" -f 2|uniq`;
+chomp(@ips);
+my $ipList;
+for my $ip (@ips) {
+	$ipList .= "$ip ";
+};
+
+my $text = "LoadModule rpaf_module modules/mod_rpaf-2.0.so
+
+#Mod_rpaf settings
+RPAFenable On
+RPAFproxy_ips $ipList
+RPAFsethostname On";
+
+open FILE, ">$include_file" or die "unable to open $include_file $!";
+print FILE "$text";
+close(FILE);
+
+if ( $cpChk eq 'yes' ) {
+	system("wget -O /scripts/after_apache_make_install http://layer3.liquidweb.com/scripts/plBake/recipes/recipeFiles/rpaf_files/after_apache_make_install > /dev/null 2>&1");
+	system("chmod +x /scripts/after_apache_make_install > /dev/null 2>&1");
+}

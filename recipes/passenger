@@ -1,0 +1,86 @@
+#!/usr/bin/perl
+
+my @SRCREQ = ('rubygems');
+my $SRCREQref = \@SRCREQ;
+bake_reqs($SRCREQref);
+
+our $FIN_MSG = "Finished baking Passenger for Apache. Please restart Apache for full Passenger support. If you need help deploying an application, please see https://wiki.int.liquidweb.com/articles/Passenger#Application_setup; Enjoy.";
+
+sub addToPath {
+	my $presentCheck = `grep 'export APXS2=/usr/local/apache/bin/apxs && export PATH=\$PATH:/usr/local/apache/bin' /etc/profile`;
+	if ( $presentCheck !~ /APXS2/ ) {
+	        system("echo 'export APXS2=/usr/local/apache/bin/apxs && export PATH=\$PATH:/usr/local/apache/bin' >> /etc/profile");
+	}
+}
+
+my $apacheVersion = apacheVer();
+if ( $apacheVersion eq '1.x' ) {
+	die_log("Passenger requires Apache 2.0.x or greater.");
+}
+
+my @cmds = ('yum install curl curl-devel -y');
+my $cmdsRef = \@cmds;
+pre_install($cmdsRef);
+
+my $centosV = centVer();
+if ( $centosV <= '4' ) {
+	warnM("Older CentOS detected, installing Passenger 2.2.15...");
+        my @cmds = ('gem install passenger -v=2.2.15');
+        my $cmdsRef = \@cmds;
+        pre_install($cmdsRef);
+	
+	addToPath();
+	my $rawOut = `source /etc/profile && passenger-install-apache2-module -a 2>&1 1>/root/passenger.tmp`;
+	if ( $? != 0 ) {
+		die_log("passenger-install-apache2-module threw error: \n $rawOut");
+	}
+	
+	## Remove color code sillyness...
+	system("sed -r -i \"s/\\x1B\\[([0-9]{1,2}(;[0-9]{1,2})?)?[m|K]//g\" /root/passenger.tmp > /dev/null 2>&1");
+	my $toInsert = `grep -E '(LoadModule passenger_module|PassengerRoot|PassengerRuby)' /root/passenger.tmp`;
+	unlink('/root/passenger.tmp');	
+
+	my $include_file;
+	my $cPanelChk = has_cpanel();
+	if ( $cPanelChk eq 'yes') {
+		$include_file = '/usr/local/apache/conf/passenger.conf';
+		system("echo ' ' >> /usr/local/apache/conf/includes/pre_main_global.conf");
+		system("echo 'Include \"/usr/local/apache/conf/passenger.conf\"' >> /usr/local/apache/conf/includes/pre_main_global.conf");
+	}
+	else {
+		$include_file = '/etc/httpd/conf.d/passenger.conf';
+	}
+	open FILE, ">$include_file" or die "unable to open $include_file $!";
+	print FILE "$toInsert";
+	close(FILE);
+}
+else {
+	my @cmds = ('gem install passenger -v=3.0.8');
+	my $cmdsRef = \@cmds;
+	pre_install($cmdsRef);	
+
+	addToPath();
+	my $rawOut = `source /etc/profile && passenger-install-apache2-module -a 2>&1 1>/root/passenger.tmp`;
+	if ( $? != 0 ) {
+                die_log("passenger-install-apache2-module threw error: \n $rawOut");
+        }
+
+	## Remove color code sillyness...
+	system("sed -r -i \"s/\\x1B\\[([0-9]{1,2}(;[0-9]{1,2})?)?[m|K]//g\" /root/passenger.tmp > /dev/null 2>&1");
+	my $toInsert = `grep -E '(LoadModule passenger_module|PassengerRoot|PassengerRuby)' /root/passenger.tmp`;
+	unlink('/root/passenger.tmp');
+
+	my $include_file;
+        my $cPanelChk = has_cpanel();
+        if ( $cPanelChk eq 'yes') {
+                $include_file = '/usr/local/apache/conf/passenger.conf';
+		system("echo ' ' >> /usr/local/apache/conf/includes/pre_main_global.conf");
+        	system("echo 'Include \"/usr/local/apache/conf/passenger.conf\"' >> /usr/local/apache/conf/includes/pre_main_global.conf");
+	}
+        else {
+                $include_file = '/etc/httpd/conf.d/passenger.conf';
+        }
+        open FILE, ">$include_file" or die "unable to open $include_file $!";
+        print FILE "$toInsert";
+        close(FILE);
+}

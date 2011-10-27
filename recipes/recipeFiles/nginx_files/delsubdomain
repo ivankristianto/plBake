@@ -1,0 +1,33 @@
+#!/usr/bin/perl
+## plBake NGINX recipe hook script to remove the NGINX vhost
+## when a subdomain is removed.
+
+use POSIX qw(strftime);
+use XML::Simple;
+
+my $xml_string;
+while(<STDIN>) {
+        $xml_string .= $_;
+}
+my $xml_hashed = XMLin($xml_string);
+
+sub logger {
+        my $text = $_[0];
+        my $log = '/var/log/NGINXhooks.log';
+        if ( ! -e "$log" ) {
+                system("touch $log");
+        }
+        open FILE, ">>$log" or die "unable to open $log $!";
+        print FILE " [ ",POSIX::strftime("%m/%d/%Y %H:%M:%S ", localtime)  ,"] " , "$text \n";
+        close(FILE);
+}
+
+my $vhostDir = '/etc/nginx/vhosts';
+if ( -d "$vhostDir" ) {
+        my $domain = $xml_hashed->{'cpanelevent'}->{'params'}->{'domain'};
+        $domain =~ s/_/./g;
+	unlink("$vhostDir/$domain");
+        logger("delsubdomain: Removed $vhostDir/$domain NGINX vhost");
+}
+system("/etc/init.d/nginx restart > /dev/null 2>&1");
+system("/etc/init.d/httpd restart > /dev/null 2>&1");

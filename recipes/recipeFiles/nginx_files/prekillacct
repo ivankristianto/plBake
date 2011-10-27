@@ -1,0 +1,81 @@
+#!/usr/bin/perl
+## plBake NGINX recipe hook script to remove the NGINX vhost
+## when a account is terminated.
+
+use JSON;
+use LWP::UserAgent;
+use Encode;
+use POSIX qw(strftime);
+
+my %OPTS = @ARGV;
+my $user = $OPTS{'user'};
+
+sub getAuth {
+        my $silent = $_[0];
+        if ( $silent ne 'yes' ) {
+                print "Generating hash...";
+        }
+        system("QUERY_STRING=\\\"regen=1\\\" /usr/local/cpanel/whostmgr/bin/whostmgr ./setrhash &> /dev/null");
+        my $hashfile = '/root/.accesshash';
+        if (! -e $hashfile) {
+                die_log("ERROR: Failed to automatically generate hash! Please try logging into WHM and click `Setup Remote Access Key` and then re-run this script.");
+        }
+        my $hash = `cat /root/.accesshash`;
+        if ( $silent ne 'yes' ) {
+                print "success!\n";
+        }
+        $hash =~ s/\n//g;
+        my $auth = "WHM root:" . $hash;
+        return $auth;
+}
+
+sub call {
+        my $url = $_[0];
+        my $params = $_[1] || {};
+        my $auth = getAuth('yes');
+        my $json = new JSON;
+        my $ua = LWP::UserAgent->new;
+        $ua->agent("rndCpPw");
+        $ua->env_proxy();
+        my $request = HTTP::Request->new(POST => $url);
+        $request->header( Authorization => $auth );
+        $request->content_type('application/jsonrequest');
+        $request->content("$params");
+        my $response = $ua->request($request);
+        my $rawResponse = $response->content;
+        my $result = encode("UTF-8", $rawResponse);
+        my $decoded;
+        eval {
+                $decoded = $json->allow_nonref->utf8->relaxed->decode($result);
+        };
+        if ($@) {
+                die_log("ERROR: Didn't receive a valid JSON response from cPanel API. \n Got Error: $@");
+        }
+        return $decoded;
+}
+
+sub logger {
+	my $text = $_[0];
+	my $log = '/var/log/NGINXhooks.log';
+	if ( ! -e "$log" ) {
+		system("touch $log");
+	}
+        open FILE, ">>$log" or die "unable to open $log $!";
+        print FILE " [ ",POSIX::strftime("%m/%d/%Y %H:%M:%S ", localtime)  ,"] " , "$text \n";
+        close(FILE);
+
+}
+
+my $vhostDir = '/etc/nginx/vhosts';
+my $domain;
+my $listaccts = call("http://127.0.0.1:2086/json-api/listaccts");
+for my $acct( @{$listaccts->{acct}} ) {
+        if ( $acct->{user} eq $user ) {
+                $domain = $acct->{domain};
+        }
+};
+if ( -e "$vhostDir/$domain" ) {
+        unlink "$vhostDir/$domain";
+	logger("prekillacct: Removed NGINX VHOST $vhostDir/$domain");
+}
+system("/etc/init.d/nginx restart > /dev/null 2>&1");

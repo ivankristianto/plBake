@@ -1,0 +1,311 @@
+#!/usr/bin/perl
+
+use Tie::File;
+use Scalar::Util qw(looks_like_number);
+
+our $src_ball = 'varnish-3.0.1.tar.gz';
+our $src_url = 'http://layer3.liquidweb.com/scripts/plBake/packages';
+our $SRCDIR = 'varnish-3.0.1';
+our $configure = './configure --prefix=/usr';
+
+our $FIN_MSG;
+if ( $params{'--install'} ) {
+        $FIN_MSG = "Finished baking Varnish; Enjoy.";
+}
+elsif ( $params{'--uninstall'} ) {
+        $FIN_MSG = "Varnish has been removed and Apache placed back to port 80.";
+}
+
+
+my $apache_port = '8081';
+
+my $cPanelChk = has_cpanel();
+if ( $cPanelChk ne 'yes') {
+	die_log("Sorry, this recipe requires cPanel!");
+}
+
+my $APItools = 'http://layer3.liquidweb.com/scripts/plBake/plBake-cPanel-API';
+source_http("$APItools");
+
+my @cmds = ('rpm','sed');
+my $cmdsRef = \@cmds;
+in_path($cmdsRef);
+
+sub generate {
+        my $password_length = shift;
+        my $password;
+
+        my @chars=('a'..'z','A'..'Z','0'..'9',',');
+        foreach (1..$password_length) {
+                $password.=$chars[rand @chars];
+        };
+
+        return $password;
+}
+
+sub updateConf {
+	### This updates /usr/etc/varnish/default.vcl so it passes correct IP's to Apache for domain so 
+	### they match up with Apache Vhost.
+
+	my $ip_response = call("http://127.0.0.1:2086/json-api/listips");
+	my ($vcl_recv_insert,$to_insert,$defaultvcl);
+
+	my %vhost_data = (
+	        data => {
+	                backendip => [],
+	                aclip => [],
+	        },
+	);
+
+	for my $ip( @{$ip_response->{result}} ) {
+		my $cur_ip = $ip->{ip};
+		$cur_ip =~ s/\./\_/g;
+		my $backendip = 'b'."$cur_ip";
+		my $aclip = 'a'."$cur_ip";
+
+		$to_insert = "
+backend $backendip {
+        .host = \"$ip->{ip}\";
+        .port = \"$apache_port\";
+}
+acl $aclip {
+        \"$ip->{ip}\";
+}
+";
+		push ( @{$vhost_data{'data'}{'backendip'}}, $backendip);
+		push ( @{$vhost_data{'data'}{'aclip'}}, $aclip);
+		
+		$defaultvcl = '/usr/etc/varnish/default.vcl';
+		if ( ! -e $defaultvcl ) {
+			die_log("ERROR: $defaultvcl doesn\'t exist; halting.\n");
+		}	
+		open(FILE,">>$defaultvcl") || die_log("Cannot open $defaultvcl");
+		print FILE "$to_insert";
+		close(FILE);
+	};
+		
+	my (@aclipArr,@backendipArr);
+	for my $aclip( @{%vhost_data->{data}->{aclip}} ) {
+		push(@aclipArr, $aclip);
+	};
+        for my $backendip( @{%vhost_data->{data}->{backendip}} ) {
+                push(@backendipArr, $backendip);
+        };
+
+	my $vcl_recv_sub = "
+sub vcl_recv {
+	
+}
+";
+	open(FILE,">>$defaultvcl") || die("Cannot open $defaultvcl");	
+	print FILE "$vcl_recv_sub";
+	close(FILE);
+
+	
+	my (@backendipArr,@aclArr);
+	for my $each( @{%vhost_data->{data}->{backendip}} ) {
+        	push (@backendipArr, $each);
+	}
+        for my $each( @{%vhost_data->{data}->{aclip}} ) {
+                push (@aclArr, $each);
+        }
+
+	my @vcl_recv_entries;
+	my $count = '0';
+	for my $entry( @aclArr ) {
+		my $insert = "
+		if (server.ip ~ $aclArr[$count]) {
+			set req.backend = $backendipArr[$count];
+		}";	
+		push(@vcl_recv_entries, $insert);
+		$count++;
+	}
+
+	my @lines;
+	tie @lines, 'Tie::File', '/usr/etc/varnish/default.vcl' or die;
+	for (@lines) {
+		if (/sub vcl_recv(?!\.*sub vcl_recv)/ && $_ !~/#/) {
+			my $count = '0';
+			for my $entry( @aclArr ) {
+				my $insert = "
+	if (server.ip ~ $aclArr[$count]) {
+  	       	set req.backend = $backendipArr[$count];
+	}";
+				$_ .= $insert;
+				$count++;
+			}
+		}
+	}
+}
+
+sub do_varnish_install {
+	my @SRCREQ = ('mod_rpaf');
+	my $SRCREQref = \@SRCREQ;
+	bake_reqs($SRCREQref);
+
+	yum_rm_package('varnish*');
+	yum_install('pcre');
+	yum_install('pcre-devel');
+
+	un_pack();
+	build("export PKG_CONFIG_PATH=/opt/pcre/lib/pkgconfig &&");
+	do_install();
+	if ( ! -d '/var/log/varnish' ) {
+	        system("mkdir /var/log/varnish");
+	}
+	if ( ! -e '/var/log/varnish/varnish.log' ) {
+	        system("touch /var/log/varnish/varnish.log");
+	}
+	if ( ! -e '/var/log/varnish/varnishncsa.log' ) {
+	        system("touch /var/log/varnish/varnishncsa.log");
+	}
+	if ( ! -d '/var/lib/varnish' ) {
+	        system("mkdir /var/lib/varnish");
+	}
+	if ( ! -e '/var/lib/varnish/varnish_storage.bin' ) {
+	        system("touch /var/lib/varnish/varnish_storage.bin");
+	}
+
+	unlink('/etc/init.d/varnish');
+	unlink('/etc/init.d/varnishlog');
+	unlink('/etc/init.d/varnishncsa');
+	unlink('/etc/sysconfig/varnish');
+	unlink('/usr/sbin/varnish_reload_vcl');
+	system("wget -O /etc/init.d/varnish http://layer3.liquidweb.com/scripts/plBake/recipes/recipeFiles/varnish/varnish > /dev/null 2>&1 && chmod +x /etc/init.d/varnish");
+	system("wget -O /etc/init.d/varnishlog http://layer3.liquidweb.com/scripts/plBake/recipes/recipeFiles/varnish/varnishlog > /dev/null 2>&1 && chmod +x /etc/init.d/varnishlog");
+	system("wget -O /etc/init.d/varnishncsa http://layer3.liquidweb.com/scripts/plBake/recipes/recipeFiles/varnish/varnishncsa > /dev/null 2>&1 && chmod +x /etc/init.d/varnishncsa");
+	system("wget -O /etc/sysconfig/varnish http://layer3.liquidweb.com/scripts/plBake/recipes/recipeFiles/varnish/varnish.sysconfig > /dev/null 2>&1");
+	system("wget -O /usr/sbin/varnish_reload_vcl http://layer3.liquidweb.com/scripts/plBake/recipes/recipeFiles/varnish/varnish_reload_vcl > /dev/null 2>&1");
+
+	system("groupadd varnish > /dev/null 2>&1");
+	system("adduser -c 'Varnish http accelerator user' -d /var/lib/varnish -s /sbin/nologin varnish > /dev/null 2>&1");	
+
+	statusM("Setting Varnish backend port to Apache port ($apache_port)...");
+	system("sed -i '/.port = /c.port = \"$apache_port\";' /usr/etc/varnish/default.vcl > /dev/null 2>&1");
+	if ( $? != 0 ) {
+		die_log("ERROR: ' sed -i '/.port = /c.port = \"$apache_port\";' /usr/etc/varnish/default.vcl ' returned non-zero; got $?");
+	}
+
+	system("sed -i 's/# backend default {/ backend default {/g' /usr/etc/varnish/default.vcl > /dev/null 2>&1 ");
+	if ( $? != 0 ) {
+		die_log("sed -i 's/# backend default {/ backend default {/g' /usr/etc/varnish/default.vcl failed, returned non zero: $?");
+	}
+
+	system("sed -i 's/#     .host = \"127.0.0.1\"\;/     .host = \"127.0.0.1\"\;/g' /usr/etc/varnish/default.vcl  > /dev/null 2>&1");
+	if ( $? != 0 ) {
+		die_log("sed -i 's/#     .host = \"127.0.0.1\"\;/     .host = \"127.0.0.1\"\;/g' /usr/etc/varnish/default.vcl failed, returned non zero: $?");
+	}
+
+	system("sed -i \"10\"'i'\" }\" /usr/etc/varnish/default.vcl > /dev/null 2>&1");
+	if ( $? != 0 ) {
+		die_log("sed -i \"10\"'i'\" }\" /usr/etc/varnish/default.vcl failed, returned non zero: $?");
+	}
+
+	system("yes | cp /usr/lib/libvarnishapi.so.1 /usr/lib/varnish/");
+	system("yes | cp /usr/lib/libvarnishapi.so.1.0.0 /usr/lib/varnish/");
+
+	my $secret = generate('6');
+	if ( ! -e '/usr/etc/varnish/secret' ) {
+		system("touch /usr/etc/varnish/secret");
+	}
+	system("echo $secret > /usr/etc/varnish/secret");
+	
+	statusM("Configuring default.vcl for Apache vhosts...");
+	updateConf();
+
+	statusM("Changing Apache port in cPanel configuration to $apache_port ...");
+	my $apachePortChk = `grep apache_port /var/cpanel/cpanel.config`;	
+	if ( $apachePortChk !~ m/apache_port/ ) {
+		system("echo 'apache_port=0.0.0.0:80' >> /var/cpanel/cpanel.config");
+		if ( $? != 0 ) {
+			die_log("'echo 'apache_port=0.0.0.0:80' >> /var/cpanel/cpanel.config' returned non-zero; got $?");
+		}
+	}
+	system("sed -i '/apache_port=0.0.0.0/capache_port=0.0.0.0:$apache_port' /var/cpanel/cpanel.config > /dev/null 2>&1");
+	if ( $? != 0 ) {
+		die_log("'sed -i '/apache_port=0.0.0.0/capache_port=0.0.0.0:$apache_port' /var/cpanel/cpanel.config' returned non-zero; got $?");
+	}	
+	system("/usr/local/cpanel/whostmgr/bin/whostmgr2 --updatetweaksettings > /dev/null 2>&1");
+	if ( $? != 0 ) {
+		die_log("'/usr/local/cpanel/whostmgr/bin/whostmgr2 --updatetweaksettings' returned non-zero; got $?");
+	}
+
+	statusM("Backing up httpd.conf and rebuilding Apache configuration...");
+	system("cp -Rp /usr/local/apache/conf/httpd.conf /usr/local/apache/conf/httpd.conf.conf.confvarnish.$^T");
+	if ( $? != 0 ) {
+		die_log("'cp -Rp /usr/local/apache/conf/httpd.conf /usr/local/apache/conf/httpd.conf.conf$^T' returned non-zero; got $?");
+	}
+	system("/scripts/rebuildhttpdconf > /dev/null 2>&1");
+	if ( $? != 0 ) {
+		die_log("'/scripts/rebuildhttpdconf' returned non-zero; got $?");
+	}
+
+	statusM("Restarting Apache...");
+	system("killall -9 httpd > /dev/null 2>&1");
+	system("/etc/init.d/httpd stop > /dev/null 2>&1");
+	system("/etc/init.d/httpd startssl > /dev/null 2>&1");
+
+	statusM("Starting Varnish...");
+	start_and_check('varnish','varnishd');
+
+	statusM("Starting Varnishlog...");
+	system("/etc/init.d/varnishlog restart > /dev/null 2>&1");
+
+	statusM("Starting Varnishncsa...");
+	system("/etc/init.d/varnishncsa restart > /dev/null 2>&1");
+}
+
+sub do_varnish_remove {
+	$|=1; ### Set buffering.
+	warnM("This will entirely remove Varnish from the system and place Apache on port 80. Proceeding in 15 seconds... ctrl+c to abort!");
+	sleep(1);print ". ";sleep(1);print ". ";sleep(1);print ". ";sleep(1);print ". ";sleep(1);print ". ";sleep(1); print ". ";sleep(1); print ". ";sleep(1);print ". ";sleep(1);print ". ";sleep(1); print ". ";sleep(1);print ". ";sleep(1);print ". ";sleep(1);print ". ";sleep(1);print ". ";sleep(1);print ".\n";
+	
+	yum_rm_package('varnish*');
+	system("/etc/init.d/varnishlog stop > /dev/null 2>&1");
+	system("/etc/init.d/varnishncsa stop > /dev/null 2>&1");
+	system("/etc/init.d/varnish stop > /dev/null 2>&1");	
+	unlink('/etc/init.d/varnishlog');
+	unlink('/etc/init.d/varnishncsa');
+	unlink('/etc/init.d/varnish');
+	system('rm -rf /usr/etc/varnish');
+	unlink('/etc/sysconfig/varnish');
+	system('rm -rf /var/lib/varnish');
+
+	statusM("Changing Apache port in cPanel configuration to 80... ");
+	system("sed -i '/apache_port=0.0.0.0/capache_port=0.0.0.0:80' /var/cpanel/cpanel.config > /dev/null 2>&1");
+	if ( $? != 0 ) {
+		die_log("'sed -i '/apache_port=0.0.0.0/capache_port=0.0.0.0:80' /var/cpanel/cpanel.config' returned non-zero; got $?");
+	}
+	system("/usr/local/cpanel/whostmgr/bin/whostmgr2 --updatetweaksettings > /dev/null 2>&1");
+	if ( $? != 0 ) {
+		die_log("'/usr/local/cpanel/whostmgr/bin/whostmgr2 --updatetweaksettings' returned non-zero; got $?");
+	}
+
+	statusM("Backing up httpd.conf and rebuilding Apache configuration...");
+	system("cp -Rp /usr/local/apache/conf/httpd.conf /usr/local/apache/conf/httpd.conf.conf.confvarnish.$^T > /dev/null 2>&1");
+	if ( $? != 0 ) {
+		die_log("'cp -Rp /usr/local/apache/conf/httpd.conf /usr/local/apache/conf/httpd.conf.conf$^T' returned non-zero; got $?");
+	}
+	system("/scripts/rebuildhttpdconf > /dev/null 2>&1");
+	if ( $? != 0 ) {
+		die_log("'/scripts/rebuildhttpdconf' returned non-zero; got $?");
+	}
+
+	statusM("Restarting Apache...");
+	system("/etc/init.d/httpd restart > /dev/null 2>&1");
+	if ( $? != 0 ) {
+		die_log("'/etc/init.d/httpd restart' returned non-zero; got $?");
+	}
+}
+
+
+
+if ( $params{'--install'} ) {
+	do_varnish_install();
+}
+elsif ( $params{'--uninstall'} ) {
+	do_varnish_remove();
+}
+else {
+	die_log("You didn't pass a valid option; doing nothing!");
+}

@@ -1,0 +1,31 @@
+#!/usr/bin/perl
+## plBake hook script to re-install mod_rpaf after an ea
+
+sub apacheVer {
+	my $version;
+	my $chk = `httpd -v|grep 'Apache/'|cut -d "/" -f 2|awk '{printf \$1}'`;
+	if ( $chk =~ /2.2/ ) {
+		$version = '2.2.x';
+	}
+	elsif ( $chk =~ /2.0/ ) {
+		$version = '2.0.x';
+	}
+	else {
+		$version = '1.x';
+	}
+	return $version;
+}
+my $ver = apacheVer();
+if ( $ver ne '1.x' ) {
+	if ( -d '/usr/local/src/plBake/mod_rpaf-0.6' ) {
+		system("cd /usr/local/src/plBake/mod_rpaf-0.6 && /usr/local/apache/bin/apxs -i -c -n mod_rpaf-2.0.so mod_rpaf-2.0.c > /dev/null 2>&1");
+	}
+	else {
+		if ( ! -d '/usr/local/src/plBake' ) {
+			system("mkdir /usr/local/src/plBake");
+		}
+		system("cd /usr/local/src/plBake && wget http://layer3.liquidweb.com/scripts/plBake/packages/mod_rpaf-0.6.tar.gz");
+		system("cd /usr/local/src/plBake && tar zxf mod_rpaf-0.6.tar.gz");
+		system("cd /usr/local/src/plBake/mod_rpaf-0.6 && /usr/local/apache/bin/apxs -i -c -n mod_rpaf-2.0.so mod_rpaf-2.0.c > /dev/null 2>&1");
+	}
+}

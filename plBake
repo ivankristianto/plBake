@@ -13,7 +13,7 @@ if ( scalar(@ARGV) == 0 ) {
 	print "You need to specify a recipe to install.\n";
 	exit(1);
 }
-my $PLBAKEFUNCTIONS = 'http://scripts.ssullivan.org/plBake-functions';
+my $PLBAKEFUNCTIONS = 'http://layer3.liquidweb.com/scripts/plBake/plBake-functions';
 our @args;
 for my $arg (@ARGV) {
 	push(@args, $arg);

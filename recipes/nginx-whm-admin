@@ -1,0 +1,20 @@
+#!/usr/bin/perl
+
+my @SRCREQ = ('nginx');
+my $SRCREQref = \@SRCREQ;
+bake_reqs($SRCREQref);
+
+our $src_ball = 'nginxadmin.tar.gz';
+our $src_url = 'http://layer3.liquidweb.com/scripts/plBake/recipes/recipeFiles/nginxadmin_files';
+our $SRCDIR = 'nginxadmin';
+our $FIN_MSG = "mod_rpaf, nginx, hook scripts, and nginx WHM admin plugin have been installed; Enjoy.";
+
+my $cPanelChk = has_cpanel();
+if ( $cPanelChk ne 'yes' ) {
+	die_log("Sorry, nginx-whm-admin recipe is only for cPanel servers (its a plugin for WHM).");
+}
+
+un_pack();
+my @cmds = ("cp -Rp $BUILDPREF/$SRCDIR/* /usr/local/cpanel/whostmgr/docroot/cgi");
+my $cmdsRef = \@cmds;
+pre_install($cmdsRef);

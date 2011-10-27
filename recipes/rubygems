@@ -1,0 +1,23 @@
+#!/usr/bin/perl
+
+my @SRCREQ = ('ruby');
+my $SRCREQref = \@SRCREQ;
+bake_reqs($SRCREQref);
+
+our $src_ball = 'rubygems-1.3.1.tgz';
+our $src_url = 'http://layer3.liquidweb.com/scripts/plBake/packages';
+our $SRCDIR = 'rubygems-1.3.1';
+our $FIN_MSG = "Rubygems has been installed/updated successfully.";
+
+if ( -e '/scripts/installruby' ) {
+	my @cmds = ('gem install rubygems-update','update_rubygems');
+        my $cmdsRef = \@cmds;
+        pre_install($cmdsRef);	
+}
+else {
+	un_pack();
+	my $stderr = `cd $BUILDPREF/$SRCDIR && ruby setup.rb 2>&1 1>/dev/null`;
+	if ( $? != 0 ) {
+		die_log("ruby setup.rb threw error: $stderr");
+	} 			
+}

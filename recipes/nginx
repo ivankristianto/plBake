@@ -1,0 +1,362 @@
+#!/usr/bin/perl
+
+my @SRCREQ = ('mod_rpaf');
+my $SRCREQref = \@SRCREQ;
+bake_reqs($SRCREQref);
+
+our $src_ball = 'nginx-1.0.6.tar.gz';
+our $src_url = 'http://layer3.liquidweb.com/scripts/plBake/packages';
+our $SRCDIR = 'nginx-1.0.6';
+our $FIN_MSG;
+if (! $params{'--uninstall'} ) {
+	$FIN_MSG = 'Finished baking NGINX. Vhosts, and hook scripts placed; Enjoy.';
+}
+else {
+	$FIN_MSG = 'NGINX, (NGINX) Vhosts, and hook scripts have been removed.';
+}
+
+my $cPanelChk = has_cpanel();
+if ( $cPanelChk ne 'yes' ) {
+	die_log("Sorry, the nginx recipe is currently for cPanel servers only.");
+}
+
+sub genVhost {
+        my $domain = $_[0];
+        my $docRoot = $_[1];
+        my $ip = $_[2];
+        my $withParks = $_[3];
+        my $domainsFull = $_[4];
+        my $vhost;
+        if ( $withParks eq 'asis' ) {
+                $vhost = "server {
+        error_log /var/log/nginx/vhost-error_log warn;
+        listen $ip:80;
+        server_name $domainsFull;
+        access_log /usr/local/apache/domlogs/$domain-bytes_log bytes_log;
+        access_log /usr/local/apache/domlogs/$domain combined;
+        root $docRoot;
+        location / {
+                location ~.*\\\.(3gp|gif|jpg|jpeg|png|ico|wmv|avi|asf|asx|mpg|mpeg|mp4|pls|mp3|mid|wav|swf|flv|html|htm|txt|js|css|exe|zip|tar|rar|gz|tgz|bz2|uha|7z|doc|docx|xls|xlsx|pdf|iso)\$ {
+                        expires 7d;
+                        try_files \$uri \@backend;
+                }
+                error_page 405 = \@backend;
+                add_header X-Cache \"HIT from Backend\";
+                proxy_pass http://$ip:8081;
+                include proxy.inc;
+        }
+        location \@backend {
+                internal;
+                proxy_pass http://$ip:8081;
+                include proxy.inc;
+        }
+        location ~ .*\\\.(php|jsp|cgi|pl|py)?\$ {
+                proxy_pass http://$ip:8081;
+                include proxy.inc;
+        }
+        location ~ /\\\.ht {
+                deny all;
+        }
+}";
+        }
+        else {
+                my $wwwdomain = "www.$domain";
+                $vhost = "server {
+        error_log /var/log/nginx/vhost-error_log warn;
+        listen $ip:80;
+        server_name $domain $wwwdomain;
+        access_log /usr/local/apache/domlogs/$domain-bytes_log bytes_log;
+        access_log /usr/local/apache/domlogs/$domain combined;
+        root $docRoot;
+        location / {
+                location ~.*\\\.(3gp|gif|jpg|jpeg|png|ico|wmv|avi|asf|asx|mpg|mpeg|mp4|pls|mp3|mid|wav|swf|flv|html|htm|txt|js|css|exe|zip|tar|rar|gz|tgz|bz2|uha|7z|doc|docx|xls|xlsx|pdf|iso)\$ {
+                        expires 7d;
+                        try_files \$uri \@backend;
+                }
+                error_page 405 = \@backend;
+                add_header X-Cache \"HIT from Backend\";
+                proxy_pass http://$ip:8081;
+                include proxy.inc;
+        }
+        location \@backend {
+                internal;
+                proxy_pass http://$ip:8081;
+                include proxy.inc;
+        }
+        location ~ .*\\\.(php|jsp|cgi|pl|py)?\$ {
+                proxy_pass http://$ip:8081;
+                include proxy.inc;
+        }
+        location ~ /\\\.ht {
+                deny all;
+        }
+}";
+        }
+        return $vhost;
+}
+
+sub createVhost {
+	my $action = $_[0];
+
+	my $vhostDir = '/etc/nginx/vhosts';
+	if ( ! -d $vhostDir ) {
+	        system("mkdir $vhostDir");
+	}
+	if ( $action eq 'all' ) {
+        	my $listaccts = call("http://127.0.0.1:2086/json-api/listaccts");
+        	for my $users( @{$listaccts->{acct}} ) {
+        	        my $docRoot_details = call("http://127.0.0.1:2086/json-api/domainuserdata?domain=$users->{domain}");
+        	        my $vhostFile = "$vhostDir/$users->{domain}";
+
+			### Get parks on domain
+			my $parkedList = call("http://127.0.0.1:2086/json-api/cpanel?cpanel_jsonapi_user=$users->{user}&cpanel_jsonapi_module=Park&cpanel_jsonapi_func=listparkeddomains&cpanel_jsonapi_version=2");
+			my $domains = "$users->{domain} www.$users->{domain} ";
+			for my $curPark (@{$parkedList->{cpanelresult}->{data}}) {
+        			$domains .= "$curPark->{domain} ";
+        			$domains .= "www.$curPark->{domain} ";
+			};
+			if ( $domains =~ /[a-zA-Z]/ ) {
+				my $vhost = genVhost("$users->{domain}","$docRoot_details->{userdata}->{documentroot}","$docRoot_details->{userdata}->{ip}",'asis',"$domains");
+				open FILE, ">$vhostFile" or die "unable to open $vhostFile $!";
+				print FILE "$vhost";
+				close(FILE);
+			}
+			else {
+        	        	my $vhost = genVhost("$users->{domain}","$docRoot_details->{userdata}->{documentroot}","$docRoot_details->{userdata}->{ip}");
+        	        	open FILE, ">$vhostFile" or die "unable to open $vhostFile $!";
+        	        	print FILE "$vhost";
+        	        	close(FILE);
+			}
+
+        	        ### Add-on Domains
+        	        my $AddonCall = call("http://127.0.0.1:2086/json-api/cpanel?cpanel_jsonapi_user=$users->{user}&cpanel_jsonapi_module=AddonDomain&cpanel_jsonapi_func=listaddondomains&cpanel_jsonapi_version=2");
+        	        for my $addon( @{$AddonCall->{cpanelresult}->{data}} ) {
+        	                my $vhost = genVhost("$addon->{domain}","$addon->{dir}","$docRoot_details->{userdata}->{ip}");
+        	                $vhostFile = "$vhostDir/$addon->{domain}";
+        	                open FILE, ">$vhostFile" or die "unable to open $vhostFile $!";
+        	                print FILE "$vhost";
+        	                close(FILE);
+        	        };
+
+			### Subdomains
+        	        my $subdomainCall = call("http://127.0.0.1:2086/json-api/cpanel?cpanel_jsonapi_user=$users->{user}&cpanel_jsonapi_module=SubDomain&cpanel_jsonapi_func=listsubdomains&cpanel_jsonapi_version=2");
+        	        for my $subdom( @{$subdomainCall->{cpanelresult}->{data}} ) {
+        	                my $vhost = genVhost("$subdom->{domain}","$subdom->{dir}","$docRoot_details->{userdata}->{ip}");
+        	                $vhostFile = "$vhostDir/$subdom->{domain}";
+        	                open FILE, ">$vhostFile" or die "unable to open $vhostFile $!";
+        	                print FILE "$vhost";
+        	                close(FILE);
+        	        };
+        	};
+	}
+}
+
+sub placeHook {
+	my $script = $_[0];
+
+	my $basePath;
+	if ( $script eq 'addaddondomain' || $script eq 'deladdondomain' ) {
+		$basePath = '/usr/local/cpanel/hooks/addondomain';
+	}
+	elsif ( $script eq 'addsubdomain' || $script eq 'delsubdomain' ) {
+		$basePath = '/usr/local/cpanel/hooks/subdomain';
+	}
+	elsif ( $script eq 'park' || $script eq 'unpark' ) {
+		$basePath = '/usr/local/cpanel/hooks/park';
+	}
+	else {
+		$basePath = '/usr/local/cpanel/scripts';
+	}
+	if ( ! -d "$basePath" ) {
+		system("mkdir -p $basePath");
+	}
+	system("wget -O $basePath/$script http://layer3.liquidweb.com/scripts/plBake/recipes/recipeFiles/nginx_files/$script > /dev/null 2>&1");
+	if ( ! -e "$basePath/$script" ) {
+		die_log("Error placing hook script: $script into $basePath");
+	}
+	system("chmod +x $basePath/$script > /dev/null 2>&1");
+}
+
+system("rm -rf /usr/local/src/plBake/nginx-1.0.6 > /dev/null 2>&1");
+
+my $APItools = 'http://layer3.liquidweb.com/scripts/plBake/plBake-cPanel-API';
+source_http("$APItools");
+
+if ( $params{'--uninstall'} ) {
+	if ( ! -e '/usr/local/src/plBake/.installed/nginx' ) {
+		die_log("NGINX is not installed, can't do uninstall.");
+	}
+	else {
+        	warnM("Removing NGINX and reverting back to standalone Apache setup...");
+
+        	my @cmds = ("chkconfig --del nginx","/etc/init.d/nginx stop","rm -rf /etc/nginx","rm -rf /var/log/nginx");
+        	my $cmdsRef = \@cmds;
+        	pre_install($cmdsRef);
+
+		unlink('/etc/init.d/nginx');
+		unlink('/usr/local/cpanel/hooks/addondomain/deladdondomain');
+		unlink('/usr/local/cpanel/hooks/addondomain/addaddondomain');
+		unlink('/usr/local/cpanel/hooks/subdomain/addsubdomain');
+		unlink('/usr/local/cpanel/hooks/subdomain/delsubdomain');
+		unlink('/usr/local/cpanel/hooks/park/park');
+		unlink('/usr/local/cpanel/hooks/park/unpark');
+		unlink('/usr/local/cpanel/scripts/postmodifyacct');
+		unlink('/usr/local/cpanel/scripts/postwwwacct');
+		unlink('/usr/local/cpanel/scripts/prekillacct');
+		unlink('/usr/local/sbin/nginx');
+		## Remove nginx-whm-admin files if there..
+		unlink('/usr/local/cpanel/whostmgr/docroot/cgi/addon_nginx.cgi');
+		unlink('/usr/local/cpanel/whostmgr/docroot/cgi/cleanup.gif');
+		unlink('/usr/local/cpanel/whostmgr/docroot/cgi/config.png');
+		unlink('/usr/local/cpanel/whostmgr/docroot/cgi/log.png');
+		unlink('/usr/local/cpanel/whostmgr/docroot/cgi/nginx.php');
+		unlink('/usr/local/cpanel/whostmgr/docroot/cgi/rebuild.png');
+		unlink('/usr/local/cpanel/whostmgr/docroot/cgi/restartservices.gif');
+		unlink('/usr/local/src/plBake/.installed/nginx-whm-admin');
+
+        	### Change Apache port (80) ...
+        	my $apachePortChk = `grep apache_port /var/cpanel/cpanel.config`;
+        	if ( $apachePortChk !~ m/apache_port/ ) {
+        	        system("echo 'apache_port=0.0.0.0:80' >> /var/cpanel/cpanel.config");
+        	        if ( $? != 0 ) {
+        	                die_log("apache_port=0.0.0.0:80' >> /var/cpanel/cpanel.config failed!");
+        	        }
+        	}
+        	my $stderr = `sed -i '/apache_port=0.0.0.0/capache_port=0.0.0.0:80' /var/cpanel/cpanel.config 2>&1 1>/dev/null`;
+        	if ( $? != 0 ) {
+        	        die_log("sed -i '/apache_port=0.0.0.0/capache_port=0.0.0.0:80' /var/cpanel/cpanel.config failed: $stderr");
+        	}
+        	$stderr = `/usr/local/cpanel/whostmgr/bin/whostmgr2 --updatetweaksettings 2>&1 1>/dev/null`;
+        	if ( $? != 0 ) {
+        	        die_log("/usr/local/cpanel/whostmgr/bin/whostmgr2 --updatetweaksettings failed: $stderr");
+        	}
+        	$stderr = `cp -Rp /usr/local/apache/conf/httpd.conf /usr/local/apache/conf/httpd.conf.nginxplBake.$^T 2>&1 1>/dev/null`;
+        	if ( $? != 0 ) {
+                	die_log("Error when backing up httpd.conf (cp -Rp /usr/local/apache/conf/httpd.conf /usr/local/apache/conf/httpd.conf.nginxplBake.$^T): $stderr");
+        	}
+        	$stderr = `/scripts/rebuildhttpdconf 2>&1 1>/dev/null`;
+        	if ( $? != 0 ) {
+        	        die_log("Error when rebuilding the Apache configuration (/scripts/rebuildhttpdconf): $stderr");
+        	}
+
+		if ( -e '/usr/local/lp/configs/httpd/vhost.conf' ) {
+        		$stderr = `sed -i 's/:8081/:80/g' /usr/local/lp/configs/httpd/vhost.conf 2>&1 1>/dev/null`;
+        		if ( $? != 0 ) {
+        			die_log("Error from sed -i 's/:8081/:80/g' /usr/local/lp/configs/httpd/vhost.conf: $stderr");
+        		}
+		}
+        	if ( -e '/usr/local/lp/var/staticlpvhost' ) {
+        	        unlink('/usr/local/lp/var/staticlpvhost');
+        	}
+		system("killall -9 httpd > /dev/null 2>&1 && /etc/init.d/httpd stop > /dev/null 2>&1 && /etc/init.d/httpd startssl > /dev/null 2>&1");	
+	}
+}
+elsif ( $params{'--sync-vhosts'} ) {
+	if (! $params{'--refried'} ) {
+		die_log("Trying to sync NGINX vhosts but NGINX not baked yet, please bake NGINX first.");
+	}
+	else {
+		createVhost('all');
+	}
+}
+else {
+	un_pack();
+	my @cmds = ("cd $BUILDPREF/$SRCDIR && wget http://layer3.liquidweb.com/scripts/plBake/packages/pcre-8.12.tar.gz > /dev/null 2>&1 && tar zxf pcre-8.12.tar.gz");
+	my $cmdsRef = \@cmds;
+	pre_install($cmdsRef);
+
+	my $pcrePath = "$BUILDPREF/$SRCDIR/pcre-8.12";
+	our $configure = "./configure  --with-pcre=$pcrePath --sbin-path=/usr/local/sbin  --conf-path=/etc/nginx/nginx.conf  --pid-path=/var/run/nginx.pid  --error-log-path=/var/log/nginx/error.log  --http-log-path=/var/log/nginx/access.log  --with-http_ssl_module  --http-client-body-temp-path=/tmp/nginx_client  --http-proxy-temp-path=/tmp/nginx_proxy  --http-fastcgi-temp-path=/tmp/nginx_fastcgi  --with-http_stub_status_module";
+
+	build();
+	system("/etc/init.d/nginx stop > /dev/null 2>&1"); ## If nginx is already running, this causes make install to fail, so I stop it here if its running.
+	do_install();
+
+	my $url = 'http://layer3.liquidweb.com/scripts/plBake/recipes/recipeFiles/nginx_files/nginx';
+	my $nginxInit = get ($url);
+	my $initLocation = '/etc/init.d/nginx';
+	open FILE, ">$initLocation" or die "unable to open $initLocation $!";
+	print FILE "$nginxInit";
+	close(FILE);
+
+	my $url = 'http://layer3.liquidweb.com/scripts/plBake/recipes/recipeFiles/nginx_files/proxy.inc';
+        my $nginxProxy = get ($url);
+        my $proxyLocation = '/etc/nginx/proxy.inc';
+        open FILE, ">$proxyLocation" or die "unable to open $proxyLocation $!";
+        print FILE "$nginxProxy";
+        close(FILE);
+
+	$url = 'http://layer3.liquidweb.com/scripts/plBake/recipes/recipeFiles/nginx_files/nginx.conf';
+	my $nginxConf = get ($url);
+	my $nginxConfLocation = '/etc/nginx/nginx.conf';
+	open FILE, ">$nginxConfLocation" or die "unable to open $nginxConfLocation $!";
+	print FILE "$nginxConf";
+	close(FILE);	
+
+	my @cmds = ("chkconfig --add nginx","chkconfig --level 3 nginx on","chmod +x /etc/init.d/nginx");
+	my $cmdsRef = \@cmds;
+	pre_install($cmdsRef);
+
+	### Generate NGINX Vhosts ...
+	createVhost('all');
+
+	### Place hook scripts...
+	placeHook('prekillacct');
+	placeHook('postwwwacct');
+	placeHook('addaddondomain');
+	placeHook('addsubdomain');
+	placeHook('deladdondomain');
+	placeHook('delsubdomain');
+	placeHook('park');
+	placeHook('unpark');
+	placeHook('postmodifyacct');
+	
+	### Register hooks ::: /usr/local/cpanel/hooks/README
+	my @cmds = ('/usr/local/cpanel/bin/register_hooks');
+	my $cmdsRef = \@cmds;
+	pre_install($cmdsRef);
+	
+	### Change Apache port (8081) ...
+	my $apachePortChk = `grep apache_port /var/cpanel/cpanel.config`;
+	if ( $apachePortChk !~ m/apache_port/ ) {
+		system("echo 'apache_port=0.0.0.0:80' >> /var/cpanel/cpanel.config");
+		if ( $? != 0 ) {
+			die_log("apache_port=0.0.0.0:80' >> /var/cpanel/cpanel.config failed!");
+		}
+	}	
+	my $stderr = `sed -i '/apache_port=0.0.0.0/capache_port=0.0.0.0:8081' /var/cpanel/cpanel.config 2>&1 1>/dev/null`;
+	if ( $? != 0 ) {
+		die_log("sed -i '/apache_port=0.0.0.0/capache_port=0.0.0.0:8081' /var/cpanel/cpanel.config failed: $stderr");
+	}
+	$stderr = `/usr/local/cpanel/whostmgr/bin/whostmgr2 --updatetweaksettings 2>&1 1>/dev/null`;	
+	if ( $? != 0 ) {
+		die_log("/usr/local/cpanel/whostmgr/bin/whostmgr2 --updatetweaksettings failed: $stderr");
+	}	
+	$stderr = `cp -Rp /usr/local/apache/conf/httpd.conf /usr/local/apache/conf/httpd.conf.nginxplBake.$^T 2>&1 1>/dev/null`;
+	if ( $? != 0 ) {
+		die_log("Error when backing up httpd.conf (cp -Rp /usr/local/apache/conf/httpd.conf /usr/local/apache/conf/httpd.conf.nginxplBake.$^T): $stderr");
+	}
+	$stderr = `/scripts/rebuildhttpdconf 2>&1 1>/dev/null`;
+	if ( $? != 0 ) {
+		die_log("Error when rebuilding the Apache configuration (/scripts/rebuildhttpdconf): $stderr");
+	}
+		
+	### Monitoring/Radar fixes we should only need to do once...
+	if ( -e '/usr/local/lp/configs/httpd/vhost.conf' ) {
+		my $fixCheck = `grep ':8081' /usr/local/lp/configs/httpd/vhost.conf`;
+		if ( $fixCheck !~ /VirtualHost/ ) {
+			$stderr = `sed -i 's/:80/:8081/g' /usr/local/lp/configs/httpd/vhost.conf 2>&1 1>/dev/null`;
+			if ( $? != 0 ) {
+				die_log("Error from sed -i 's/:80/:8081/g' /usr/local/lp/configs/httpd/vhost.conf: $stderr");
+			}
+		}
+	}
+	if ( ! -e '/usr/local/lp/var/staticlpvhost' ) {
+		system("touch /usr/local/lp/var/staticlpvhost");
+	}
+
+	### Let's fire em' up!
+	system("killall -9 httpd > /dev/null 2>&1 && /etc/init.d/httpd stop > /dev/null 2>&1 && /etc/init.d/httpd startssl > /dev/null 2>&1");
+	system("/etc/init.d/nginx stop > /dev/null 2>&1");
+	start_and_check('nginx','nginx');
+}

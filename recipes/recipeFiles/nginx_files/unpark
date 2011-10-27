@@ -1,0 +1,220 @@
+#!/usr/bin/perl
+## plBake NGINX recipe hook script to remove a park from the NGINX vhost
+## when a park is removed.
+
+use JSON;
+use LWP::UserAgent;
+use Encode;
+use POSIX qw(strftime);
+use XML::Simple;
+
+my $xml_string;
+while(<STDIN>) {
+        $xml_string .= $_;
+}
+my $xml_hashed = XMLin($xml_string);
+
+sub getAuth {
+        my $silent = $_[0];
+        if ( $silent ne 'yes' ) {
+                print "Generating hash...";
+        }
+        system("QUERY_STRING=\\\"regen=1\\\" /usr/local/cpanel/whostmgr/bin/whostmgr ./setrhash &> /dev/null");
+        my $hashfile = '/root/.accesshash';
+        if (! -e $hashfile) {
+                die_log("ERROR: Failed to automatically generate hash! Please try logging into WHM and click `Setup Remote Access Key` and then re-run this script.");
+        }
+        my $hash = `cat /root/.accesshash`;
+        if ( $silent ne 'yes' ) {
+                print "success!\n";
+        }
+        $hash =~ s/\n//g;
+        my $auth = "WHM root:" . $hash;
+        return $auth;
+}
+
+sub call {
+        my $url = $_[0];
+        my $params = $_[1] || {};
+        my $auth = getAuth('yes');
+        my $json = new JSON;
+        my $ua = LWP::UserAgent->new;
+        $ua->agent("rndCpPw");
+        $ua->env_proxy();
+        my $request = HTTP::Request->new(POST => $url);
+        $request->header( Authorization => $auth );
+        $request->content_type('application/jsonrequest');
+        $request->content("$params");
+        my $response = $ua->request($request);
+        my $rawResponse = $response->content;
+        my $result = encode("UTF-8", $rawResponse);
+        my $decoded;
+        eval {
+                $decoded = $json->allow_nonref->utf8->relaxed->decode($result);
+        };
+        if ($@) {
+                die_log("ERROR: Didn't receive a valid JSON response from cPanel API. \n Got Error: $@");
+        }
+        return $decoded;
+}
+
+sub logger {
+        my $text = $_[0];
+        my $log = '/var/log/NGINXhooks.log';
+        if ( ! -e "$log" ) {
+                system("touch $log");
+        }
+        open FILE, ">>$log" or die "unable to open $log $!";
+        print FILE " [ ",POSIX::strftime("%m/%d/%Y %H:%M:%S ", localtime)  ,"] " , "$text \n";
+        close(FILE);
+
+}
+
+sub genVhost {
+        my $domain = $_[0];
+        my $docRoot = $_[1];
+        my $ip = $_[2];
+        my $withParks = $_[3];
+        my $domainsFull = $_[4];
+        my $vhost;
+        if ( $withParks eq 'asis' ) {
+                $vhost = "server {
+        error_log /var/log/nginx/vhost-error_log warn;
+        listen $ip:80;
+        server_name $domainsFull;
+        access_log /usr/local/apache/domlogs/$domain-bytes_log bytes_log;
+        access_log /usr/local/apache/domlogs/$domain combined;
+        root $docRoot;
+        location / {
+                location ~.*\\\.(3gp|gif|jpg|jpeg|png|ico|wmv|avi|asf|asx|mpg|mpeg|mp4|pls|mp3|mid|wav|swf|flv|html|htm|txt|js|css|exe|zip|tar|rar|gz|tgz|bz2|uha|7z|doc|docx|xls|xlsx|pdf|iso)\$ {
+                        expires 7d;
+                        try_files \$uri \@backend;
+                }
+                error_page 405 = \@backend;
+                add_header X-Cache \"HIT from Backend\";
+                proxy_pass http://$ip:8081;
+                include proxy.inc;
+        }
+        location \@backend {
+                internal;
+                proxy_pass http://$ip:8081;
+                include proxy.inc;
+        }
+        location ~ .*\\\.(php|jsp|cgi|pl|py)?\$ {
+                proxy_pass http://$ip:8081;
+                include proxy.inc;
+        }
+        location ~ /\\\.ht {
+                deny all;
+        }
+}";
+        }
+        else {
+                my $wwwdomain = "www.$domain";
+                $vhost = "server {
+        error_log /var/log/nginx/vhost-error_log warn;
+        listen $ip:80;
+        server_name $domain $wwwdomain;
+        access_log /usr/local/apache/domlogs/$domain-bytes_log bytes_log;
+        access_log /usr/local/apache/domlogs/$domain combined;
+        root $docRoot;
+        location / {
+                location ~.*\\\.(3gp|gif|jpg|jpeg|png|ico|wmv|avi|asf|asx|mpg|mpeg|mp4|pls|mp3|mid|wav|swf|flv|html|htm|txt|js|css|exe|zip|tar|rar|gz|tgz|bz2|uha|7z|doc|docx|xls|xlsx|pdf|iso)\$ {
+                        expires 7d;
+                        try_files \$uri \@backend;
+                }
+                error_page 405 = \@backend;
+                add_header X-Cache \"HIT from Backend\";
+                proxy_pass http://$ip:8081;
+                include proxy.inc;
+        }
+        location \@backend {
+                internal;
+                proxy_pass http://$ip:8081;
+                include proxy.inc;
+        }
+        location ~ .*\\\.(php|jsp|cgi|pl|py)?\$ {
+                proxy_pass http://$ip:8081;
+                include proxy.inc;
+        }
+        location ~ /\\\.ht {
+                deny all;
+        }
+}";
+        }
+        return $vhost;
+}
+
+sub createVhost {
+        my $action = $_[0];
+        my $domains = $_[1];
+
+        my $vhostDir = '/etc/nginx/vhosts';
+        if ( ! -d $vhostDir ) {
+                system("mkdir $vhostDir");
+        }
+        if ( $action eq 'all' ) {
+                my $listaccts = call("http://127.0.0.1:2086/json-api/listaccts");
+                for my $users( @{$listaccts->{acct}} ) {
+                        my $docRoot_details = call("http://127.0.0.1:2086/json-api/domainuserdata?domain=$users->{domain}");
+                        my $vhostFile = "$vhostDir/$users->{domain}";
+                        print "Generating $vhostFile ....\n";
+                        my $vhost = genVhost("$users->{domain}","$docRoot_details->{userdata}->{documentroot}","$docRoot_details->{userdata}->{ip}");
+                        open FILE, ">$vhostFile" or die "unable to open $vhostFile $!";
+                        print FILE "$vhost";
+                        close(FILE);
+
+                        ### Add-on Domains
+                        my $AddonCall = call("http://127.0.0.1:2086/json-api/cpanel?cpanel_jsonapi_user=$users->{user}&cpanel_jsonapi_module=AddonDomain&cpanel_jsonapi_func=listaddondomains&cpanel_jsonapi_version=2");
+                        for my $addon( @{$AddonCall->{cpanelresult}->{data}} ) {
+                                my $vhost = genVhost("$addon->{domain}","$addon->{dir}","$docRoot_details->{userdata}->{ip}");
+                                $vhostFile = "$vhostDir/$addon->{domain}";
+                                print "Generating: $vhostFile\n";
+                                open FILE, ">$vhostFile" or die "unable to open $vhostFile $!";
+                                print FILE "$vhost";
+                                close(FILE);
+                        };
+
+                        my $subdomainCall = call("http://127.0.0.1:2086/json-api/cpanel?cpanel_jsonapi_user=$users->{user}&cpanel_jsonapi_module=SubDomain&cpanel_jsonapi_func=listsubdomains&cpanel_jsonapi_version=2");
+                        for my $subdom( @{$subdomainCall->{cpanelresult}->{data}} ) {
+                                my $vhost = genVhost("$subdom->{domain}","$subdom->{dir}","$docRoot_details->{userdata}->{ip}");
+                                $vhostFile = "$vhostDir/$subdom->{domain}";
+                                print "Generating: $vhostFile\n";
+                                open FILE, ">$vhostFile" or die "unable to open $vhostFile $!";
+                                print FILE "$vhost";
+                                close(FILE);
+                        };
+                };
+        }
+        else {
+                if ( $domains =~ /[a-zA-Z]/ ) {
+                        my $docRoot_details = call("http://127.0.0.1:2086/json-api/domainuserdata?domain=$action");
+                        my $vhostFile = "$vhostDir/$action";
+                        my $vhost = genVhost("$action","$docRoot_details->{userdata}->{documentroot}","$docRoot_details->{userdata}->{ip}",'asis',"$domains");
+                        open FILE, ">$vhostFile" or die "unable to open $vhostFile $!";
+                        print FILE "$vhost";
+                        close(FILE);
+                }
+                else {
+                        my $docRoot_details = call("http://127.0.0.1:2086/json-api/domainuserdata?domain=$action");
+                        my $vhostFile = "$vhostDir/$action";
+                        my $vhost = genVhost("$action","$docRoot_details->{userdata}->{documentroot}","$docRoot_details->{userdata}->{ip}");
+                        open FILE, ">$vhostFile" or die "unable to open $vhostFile $!";
+                        print FILE "$vhost";
+                        close(FILE);
+                }
+        }
+}
+
+my $domain = $xml_hashed->{CPDATA}->{DOMAIN};
+my $user = $xml_hashed->{CPDATA}->{USER};
+
+my $parkedList = call("http://127.0.0.1:2086/json-api/cpanel?cpanel_jsonapi_user=$user&cpanel_jsonapi_module=Park&cpanel_jsonapi_func=listparkeddomains&cpanel_jsonapi_version=2");
+my $domains = "$domain www.$domain ";
+for my $curPark (@{$parkedList->{cpanelresult}->{data}}) {
+        $domains .= "$curPark->{domain} ";
+        $domains .= "www.$curPark->{domain} ";
+};
+
+createVhost("$domain","$domains");
+logger("unpark: Removed park for $domain from NGINX VHOST");

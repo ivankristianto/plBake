@@ -1,0 +1,69 @@
+#!/usr/bin/perl
+###
+# plBake AUTHOR: Scott Sullivan (ssullivan@liquidweb.com)
+# LWBake AUTHOR: Dennis Walters
+#
+# DESCRIPTION: Provides methods that can be used to access
+#	       the cPanel API inside of recipes.
+
+use JSON;
+use LWP::UserAgent;
+use Encode;
+
+## Example usage from a recipe:
+##
+## my $resp = call("http://127.0.0.1:2086/json-api/passwd?user=$users->{user}&pass=$pass");
+## if ( $resp->{passwd}[0]{statusmsg} =~ m/Password changed for user/ ) {
+## 	print color 'bold blue'; print "Set $users->{user} password to: $pass \n\n"; print color 'reset';
+##	$count++;
+## }	
+
+my $cPanelChk = has_cpanel();
+if ( $cPanelChk ne 'yes' ) {
+	die_log("You're trying to use plBake-cPanel-API on a non cPanel machine! That's bad...");
+}
+
+sub getAuth {
+        my $silent = $_[0];
+        if ( $silent ne 'yes' ) {
+                print "Generating hash...";
+        }
+        system("QUERY_STRING=\\\"regen=1\\\" /usr/local/cpanel/whostmgr/bin/whostmgr ./setrhash &> /dev/null");
+        my $hashfile = '/root/.accesshash';
+        if (! -e $hashfile) {
+                die_log("ERROR: Failed to automatically generate hash! Please try logging into WHM and click `Setup Remote Access Key` and then re-run this script.");
+        }
+        my $hash = `cat /root/.accesshash`;
+        if ( $silent ne 'yes' ) {
+                print "success!\n";
+        }
+        $hash =~ s/\n//g;
+        my $auth = "WHM root:" . $hash;
+        return $auth;
+}
+
+sub call {
+        my $url = $_[0];
+        my $params = $_[1] || {};
+        my $auth = getAuth('yes');
+        my $json = new JSON;
+        my $ua = LWP::UserAgent->new;
+        $ua->agent("rndCpPw");
+        $ua->env_proxy();
+        my $request = HTTP::Request->new(POST => $url);
+        $request->header( Authorization => $auth );
+        $request->content_type('application/jsonrequest');
+        $request->content("$params");
+        my $response = $ua->request($request);
+        my $rawResponse = $response->content;
+        my $result = encode("UTF-8", $rawResponse);
+        my $decoded;
+        eval {
+                $decoded = $json->allow_nonref->utf8->relaxed->decode($result);
+        };
+        if ($@) {
+                die_log("ERROR: Didn't receive a valid JSON response from cPanel API. \n Got Error: $@");
+        }
+        return $decoded;
+}
+

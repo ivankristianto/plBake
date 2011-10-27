@@ -18,7 +18,7 @@ use vars qw($configure);
 use vars qw($php_configure);
 use vars qw($make_install);
 
-our $RECIPEURI='http://scripts.ssullivan.org/recipes/';
+our $RECIPEURI='http://layer3.liquidweb.com/scripts/plBake/recipes/';
 
 #
 # Helper methods 
@@ -197,6 +197,151 @@ sub find_htpasswd {
 }
 
 ##
+# Returns whether or not the system has cPanel.
+#
+sub has_cpanel {
+	my $answer;
+	my $cpanelVerify = `/sbin/chkconfig --list | grep cpanel`;
+	if ( $cpanelVerify !~/3:on/) {
+		$answer = 'no';
+	}
+	else {
+		$answer = 'yes';
+	}
+	return $answer;
+}
+
+##
+# Returns the CentOS version, or 'noCent' if CentOS not found.
+#
+sub centVer {
+	my $versionChkFile = '/etc/redhat-release';
+	if ( ! -e $versionChkFile ) {
+		return 'noCent';
+	}
+        my $contents = `cat $versionChkFile`;
+        my @columns = split /\s+/, $contents;
+        my @majorVer = split /\./, $columns[2];
+	return $majorVer[0];	
+}
+
+##
+# Print the sent text as a nicely formatted warning message.
+#
+sub warnM {
+	my $text = $_[0] || die "no text was sent to warnM()!\n";
+	print color 'bold yellow'; print "[ ",POSIX::strftime("%m/%d/%Y %H:%M:%S ", localtime)  ,"] "; print color 'reset'; print "WARNING: $text\n";
+}
+
+##
+# Print the sent text as a nicely formatted status message.
+# 
+sub statusM {
+	my $text = $_[0] || die "no text was sent to statusM()!\n";
+	print color 'blue'; print "[ ",POSIX::strftime("%m/%d/%Y %H:%M:%S ", localtime)  ,"] "; print color 'reset'; print "$text\n";
+}
+
+##
+# Returns the Apache version
+#
+sub apacheVer {
+	my $version;
+	my $chk = `httpd -v|grep 'Apache/'|cut -d "/" -f 2|awk '{printf \$1}'`;
+	if ( $chk =~ /2.2/ ) {
+		$version = '2.2.x';
+	}
+	elsif ( $chk =~ /2.0/ ) {
+		$version = '2.0.x';
+	}
+	else {
+		$version = '1.x';
+	}
+	return $version;
+}
+
+##
+# Returns the PHP version; error on error.
+#
+sub phpVer {
+	my $version;
+	my $chk = `php -v|grep 'built:'|awk '{print \$2}'`;
+	if ( $chk =~ /5.3/ ) {
+		$version = '5.3.x';
+	}
+	elsif ( $chk =~ /5.2/ ) {
+		$version = '5.2.x';
+	}
+	elsif ( $chk =~ /5.1/ ) {
+		$version = '5.1.x';
+	}
+	elsif ( $chk =~ /5.0/ ) {
+		$version = '5.0.x';
+	}
+	elsif ( $chk =~ /4.4/ ) {
+		$version = '4.4.x';
+	}
+	else {
+		$version = 'error';
+	}
+	return $version;
+}
+
+##
+# Checks if passed cmd(s) are in path, die if not.
+#
+sub in_path {
+        my $cmdref = $_[0];
+        for my $cmd( @{$cmdref} ) {
+        	system("which $cmd &> /dev/null");
+		if ( $? != 0 ) {
+			die_log("FATAL: $cmd is not in the path");
+		}
+	};
+}
+
+##
+# Returns which firewall software is installed. Error message if it cannot
+# determine the firewall.
+#
+sub detectFW {
+        my @fws = ('apf','csf','iptables');
+        my ($apfPresent, $csfPresent, $iptablesPresent, $firewall);
+        for my $fw (@fws) {
+                system("which $fw &> /dev/null");
+                if ( $? == 0 ) {
+                        if ( $fw eq 'apf' ) {
+                                $apfPresent = 'yes';
+                        }
+                        elsif ( $fw eq 'csf' ) {
+                                $csfPresent = 'yes';
+                        }
+                        elsif ( $fw eq 'iptables' ) {
+                                $iptablesPresent = 'yes';
+                        }
+                        else {
+                                die_log("detectFW(): Got invalid firewall type!");
+                        }
+                }
+        };
+        if ( $apfPresent eq 'yes' && $csfPresent ne 'yes' ) {
+                $firewall = 'apf';
+        }
+        elsif ( $apfPresent ne 'yes' && $csfPresent eq 'yes' ) {
+                $firewall = 'csf';
+        }
+        elsif ( $apfPresent ne 'yes' && $csfPresent ne 'yes' && $iptablesPresent eq 'yes' ) {
+                $firewall = 'iptables';
+        }
+        elsif ( $apfPresent eq 'yes' && $csfPresent eq 'yes' ) {
+                $firewall = 'Error: You have both apf and csf installed!';
+        }
+        else {
+                $firewall = 'Error: Couldn\'t determine firewall.';
+        }
+        return $firewall;
+}
+
+##
 # This method is for the lulz.
 #
 sub lol {
@@ -215,19 +360,23 @@ sub lol {
 # specifies $configure, then that is used in place of stock './configure'.
 
 sub build {
+	my $customCmd;
+	if ( $_[0] ) {
+		$customCmd = $_[0];
+	}
 	my $stderr;
 	if ( $configure ) {
-		$stderr = `cd $BUILDPREF/$SRCDIR && $configure 2>&1 1>/dev/null`;
+		$stderr = `$customCmd cd $BUILDPREF/$SRCDIR && $configure 2>&1 1>/dev/null`;
 	}
 	else {
-		$stderr = `cd $BUILDPREF/$SRCDIR && ./configure 2>&1 1>/dev/null`;
+		$stderr = `$customCmd cd $BUILDPREF/$SRCDIR && ./configure 2>&1 1>/dev/null`;
 	}
 	if ( $? != 0 ) {
-		die_log("./configure threw STDERR: $stderr");
+		die_log("$customCmd ./configure threw STDERR: $stderr");
 	}
-	$stderr = `cd $BUILDPREF/$SRCDIR && make 2>&1 1>/dev/null`;
+	$stderr = `$customCmd cd $BUILDPREF/$SRCDIR && make 2>&1 1>/dev/null`;
 	if ( $? != 0 ) {
-		die_log("make threw STDERR $stderr");
+		die_log("$customCmd make threw STDERR $stderr");
 	}
 }
 
@@ -368,12 +517,17 @@ sub fin_msg {
 sub bake_reqs {
 	my $SRCREQref = $_[0];	
 	for my $req( @{$SRCREQref} ) {
-		is_installed("depcheck","$req");
-	        my $req_url = gen_url($req);
-	        source_http("$req_url");
-        	## create the file so we know recipe is installed.
-        	system("touch $installed_dir/$req");
-		print color 'green'; print "[ ",POSIX::strftime("%m/%d/%Y %H:%M:%S ", localtime)  ,"] "; print color 'reset'; print "Dependency $req installed successfully.\n";
+		my $checkResult = is_installed("depcheck","$req");
+	        if ( $checkResult ne 'installed' ) {
+			my $req_url = gen_url($req);
+	        	source_http("$req_url");
+        		## create the file so we know recipe is installed.
+        		system("touch $installed_dir/$req");
+			print color 'green'; print "[ ",POSIX::strftime("%m/%d/%Y %H:%M:%S ", localtime)  ,"] "; print color 'reset'; print "Dependency $req installed successfully.\n";
+		}
+		else {
+			print color 'green'; print "[ ",POSIX::strftime("%m/%d/%Y %H:%M:%S ", localtime)  ,"] "; print color 'reset'; print "Dependency $req already installed; skipping...\n";
+		}
 	};
 }
 
@@ -406,12 +560,14 @@ sub first_run {
 sub is_installed {
 	my $arg = $_[0];
 	my $dep = $_[1];
+	my $return;
 	if ( $arg eq 'depcheck' ) {
 		if ( -e "$installed_dir/$dep" ) {
-			print color 'green'; print "[ ",POSIX::strftime("%m/%d/%Y %H:%M:%S ", localtime)  ,"] "; print color 'reset'; print "Dependency $dep already installed.\n";		
+			$return = 'installed';
+			return $return;
 		}
 		else {
-			print color 'blue'; print "[ ",POSIX::strftime("%m/%d/%Y %H:%M:%S ", localtime)  ,"] "; print color 'reset'; print "Baking dependency $dep...\n";
+			print color 'blue'; print "[ ",POSIX::strftime("%m/%d/%Y %H:%M:%S ", localtime)  ,"] "; print color 'reset'; print "Fetching ingredients for $dep...\n";
 		}
 	}
 	else {
@@ -454,7 +610,7 @@ sub pre_install {
 	my $cmdsRef = $_[0];
 	my $stderr;
         for my $cmd( @{$cmdsRef} ) {
-	        $stderr = `$cmd`;
+	        $stderr = `$cmd 2>/dev/null`;
         	if ( $? != 0 ) {
         	        die_log("Command failed ($cmd): $stderr");
         	}
@@ -493,8 +649,14 @@ sub main {
 	print color 'dark blue'; print "[ ",POSIX::strftime("%m/%d/%Y %H:%M:%S ", localtime)  ,"] "; print color 'reset'; print "Baking $recipe ...\n";
 	my $url = gen_url($recipe);
 	source_http("$url");
-	## create the file so we know recipe is installed.
-	system("touch $installed_dir/$recipe");
+	if (! $params{'--uninstall'} ) {
+		## create the file so we know recipe is installed.
+		system("touch $installed_dir/$recipe");
+	}
+	else {
+		## since this is a uninstall, remove the file.
+		unlink("$installed_dir/$recipe");
+	}
 	ldrefresh();
 	fin_msg();
 }

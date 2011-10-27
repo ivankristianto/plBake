@@ -1,0 +1,28 @@
+#!/usr/bin/perl
+
+our $src_ball = 'ruby-1.8.7-p174.tar.gz';
+our $src_url = 'http://layer3.liquidweb.com/scripts/packages';
+our $SRCDIR = 'ruby-1.8.7-p174';
+our $configure = './configure --prefix=/usr';
+our $FIN_MSG = "Ruby has been installed successfully.";
+
+my $rubyPath = `which ruby 2>/dev/null`;
+chomp($rubyPath);
+if ( -e $rubyPath ) {
+	warnM("Ruby is already installed (it's in the \$PATH) skipping install..");
+}
+else {
+	if ( -e '/scripts/installruby' ) {
+		my @cmds = ('/scripts/installruby');
+	        my $cmdsRef = \@cmds;
+	        pre_install($cmdsRef);
+	}
+	else {
+		my @cmds = ('yum install zlib zlib-devel openssl openssl-devel readline readline-devel -y');
+		my $cmdsRef = \@cmds;
+		pre_install($cmdsRef);
+		un_pack();
+		build();
+		do_install();
+	}
+}

@@ -1,0 +1,16 @@
+#!/usr/bin/perl
+
+our $src_ball = 'lua-5.1.4.tar.gz';
+our $src_url = 'http://layer3.liquidweb.com/scripts/plBake/packages';
+our $SRCDIR = 'lua-5.1.4';
+our $FIN_MSG = "Finished baking lua; Enjoy.";
+
+my @cmds = ('yum install readline readline-devel ncurses ncurses-devel -y');
+my $cmdsRef = \@cmds;
+pre_install($cmdsRef);
+
+un_pack();
+system("cd $BUILDPREF/$SRCDIR && make linux > /dev/null 2>&1");
+do_install();
+system("cp $BUILDPREF/$SRCDIR/etc/lua.pc /usr/lib/pkgconfig > /dev/null 2>&1");
+system("cp $BUILDPREF/$SRCDIR/etc/lua.pc /usr/local/include > /dev/null 2>&1");
